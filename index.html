@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>moreBasesBall — custom-rules baseball simulator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Graduate&family=Barlow+Semi+Condensed:wght@400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <h1>MORE<span class="lit">BASES</span>BALL</h1>
+    <span class="tagline">exhibition game · real 2024 MLB batting lines · house rules apply</span>
+  </header>
+
+  <section class="deck" aria-label="Game setup">
+    <div class="knob">
+      <label for="mode-select">Field mode</label>
+      <select id="mode-select">
+        <option value="classic" selected>Classic N-gon</option>
+        <option value="custom">Custom layout (designer)</option>
+      </select>
+    </div>
+    <div class="knob">
+      <label for="away-select">Visitors</label>
+      <select id="away-select"></select>
+    </div>
+    <div class="knob">
+      <label for="home-select">Home</label>
+      <select id="home-select"></select>
+    </div>
+    <div class="knob">
+      <label for="bases-range">Bases <span class="val" id="bases-val">3</span></label>
+      <input type="range" id="bases-range" min="1" max="7" value="3" step="1">
+      <span class="shape-name" id="shape-name">classic diamond</span>
+    </div>
+    <div class="knob">
+      <label for="innings-range">Innings <span class="val" id="innings-val">9</span></label>
+      <input type="range" id="innings-range" min="1" max="12" value="9" step="1">
+    </div>
+    <div class="knob">
+      <label for="outs-range">Outs / inning <span class="val" id="outs-val">3</span></label>
+      <input type="range" id="outs-range" min="1" max="5" value="3" step="1">
+    </div>
+    <div class="knob">
+      <label for="speed-select">Broadcast pace</label>
+      <select id="speed-select">
+        <option value="650">Radio call</option>
+        <option value="300" selected>Normal</option>
+        <option value="90">Hurry-up</option>
+        <option value="0">Instant</option>
+      </select>
+    </div>
+    <div class="actions">
+      <button class="primary" id="play-btn">Play ball</button>
+      <button id="sim-btn">Sim 500 games</button>
+      <button id="scan-btn">Scan bases 1–7</button>
+    </div>
+  </section>
+
+  <main class="arena">
+    <div>
+      <section class="panel">
+        <h2>Scoreboard</h2>
+        <div class="board">
+          <table class="linescore" id="linescore"></table>
+          <div class="situation">
+            <span class="frame" id="frame-label">—</span>
+            <span class="lamps" id="out-lamps" aria-label="outs"></span>
+            <span id="score-label"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" style="margin-top:14px">
+        <h2 id="field-title">The field — classic diamond</h2>
+        <div class="designer" id="designer" hidden>
+          <div class="toolrow" role="toolbar" aria-label="Layout tools">
+            <button class="toolbtn active" data-tool="move">Move</button>
+            <button class="toolbtn" data-tool="add">Add base</button>
+            <button class="toolbtn" data-tool="connect">Connect &rarr;</button>
+            <button class="toolbtn" data-tool="erase">Erase</button>
+            <button class="toolbtn" data-tool="path">Path check</button>
+            <button class="toolbtn active" id="sym-btn" aria-pressed="true" title="Mirror every edit at 120° and 240° around the field center">Symmetry ×3</button>
+            <span class="spacer"></span>
+            <button class="toolbtn" id="starter-btn">Starter ring</button>
+            <button class="toolbtn" id="clear-btn">Clear bases</button>
+          </div>
+          <div class="toolrow">
+            <label class="inline" for="spacing-input">Home plate spacing
+              <input type="number" id="spacing-input" min="60" max="400" step="10" value="250"> ft
+            </label>
+            <label class="inline" for="mound-input" title="Regulation is 60.5 ft. Farther favors hitters: ~-1.6 mph perceived velocity per foot">Mound distance
+              <input type="number" id="mound-input" min="45" max="75" step="0.5" value="60.5"> ft
+            </label>
+            <label class="inline" for="rule-select">Runners score at
+              <select id="rule-select">
+                <option value="cw" selected>clockwise next plate</option>
+                <option value="own">their own plate (full lap)</option>
+              </select>
+            </label>
+            <label class="inline" for="pitch-select">Pitching
+              <select id="pitch-select">
+                <option value="tri" selected>all 3 plates · shared 1s window</option>
+                <option value="seq">one plate at a time</option>
+              </select>
+            </label>
+            <label class="inline" for="runmode-select">Runners break on
+              <select id="runmode-select">
+                <option value="origin" selected>their origin plate's hit</option>
+                <option value="any">any plate's hit</option>
+              </select>
+            </label>
+          </div>
+          <div id="layout-status" class="layout-status"></div>
+        </div>
+        <div class="viewrow" role="toolbar" aria-label="Field view">
+          <button class="viewbtn active" id="view-2d" aria-pressed="true">2D</button>
+          <button class="viewbtn" id="view-3d" aria-pressed="false">3D</button>
+          <span class="camrow" id="camrow" hidden>
+            <span class="camlabel">Camera</span>
+            <button class="cambtn active" data-view="broadcast">Broadcast</button>
+            <button class="cambtn" data-view="high">High</button>
+            <button class="cambtn" data-view="overhead">Overhead</button>
+            <button class="cambtn" data-view="plate">Plate</button>
+            <span class="camhint">drag to orbit &middot; scroll to zoom</span>
+          </span>
+        </div>
+        <div class="fieldbox" id="fieldbox-2d">
+          <svg id="field" viewBox="0 0 720 600" role="img" aria-label="ball field diagram"></svg>
+        </div>
+        <div class="fieldbox fieldbox-3d" id="field3d" hidden aria-label="3D ball field"></div>
+        <div class="at-bat" id="at-bat"></div>
+      </section>
+    </div>
+
+    <section class="panel pbp-panel">
+      <h2>Play-by-play</h2>
+      <ul id="pbp"><li class="pbp-empty" id="pbp-empty">Pre-game. Set your house rules and hit PLAY BALL.</li></ul>
+    </section>
+  </main>
+
+  <div id="results"></div>
+
+  <footer>
+    Batter outcomes are drawn from each player's real 2024 MLB season rates
+    (PA, H, 2B, 3B, HR, BB, SO). Home runs always clear the fence — every other
+    hit has to survive however many bases you bolt onto the field.
+  </footer>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js" } }
+</script>
+<script src="data.js"></script>
+<script src="sim.js"></script>
+<script src="layout.js"></script>
+<script src="fielders.js"></script>
+<script src="graphsim.js"></script>
+<script src="trisim.js"></script>
+<script src="ngon.js"></script>
+<script src="editor.js"></script>
+<script src="ui.js"></script>
+<script type="module" src="field3d.js"></script>
+</body>
+</html>
