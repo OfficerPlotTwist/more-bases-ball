@@ -27,8 +27,8 @@ import { openDb, sqlPath } from './lib/duck.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(ROOT, 'data', 'statcast');
 const argv = process.argv.slice(2).map(Number).filter(Number.isFinite);
-const FIRST = argv[0] || 2015;
-const LAST = argv[1] || 2025;
+export const FIRST = argv[0] || 2015;
+export const LAST = argv[1] || 2025;
 
 const BOARDS = [
   { key: 'speed', from: 2015, id: 'player_id',
@@ -83,6 +83,9 @@ const nameOf = (r) => {
   return (combined || r.fielder_name || r.name || '').trim();
 };
 
+/* Only run the build when executed directly — importing this module (for
+ * FIRST/LAST, in tests) must not trigger a network fetch. */
+async function main() {
 fs.mkdirSync(OUT, { recursive: true });
 const db = await openDb();
 
@@ -134,3 +137,8 @@ for (let year = FIRST; year <= LAST; year++) {
 const cs = cacheStats();
 console.log(`cache  ${cs.hits} hits  ${cs.misses} fetched`);
 await db.close();
+}
+
+const isMain = process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) await main();

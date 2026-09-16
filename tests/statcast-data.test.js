@@ -18,6 +18,7 @@ function check(label, ok, detail) {
 
 (async () => {
   const { openDb, sqlPath } = await import('../tools/lib/duck.mjs');
+  const { FIRST, LAST } = await import('../tools/build-statcast.mjs');
   const db = await openDb();
   const glob = sqlPath(path.join(DIR, '*.parquet'));
 
@@ -37,6 +38,22 @@ function check(label, ok, detail) {
   const unmatched = (await db.all(
     `SELECT count(*) AS n FROM read_parquet('${glob}') WHERE mlbam IS NULL`))[0];
   check('every row has an mlbam id', Number(unmatched.n) === 0, `n=${unmatched.n}`);
+
+  // A missing year is invisible to the per-board era-start checks above once
+  // an earlier year already satisfied them — a build that died after 2023
+  // would still pass every assertion so far. Check every year is present
+  // and non-empty, not just that the columns exist somewhere in the glob.
+  const expectedYears = [];
+  for (let y = FIRST; y <= LAST; y++) expectedYears.push(y);
+
+  const yearCounts = await db.all(
+    `SELECT year, count(*) AS n FROM read_parquet('${glob}') GROUP BY year`);
+  const yearRows = new Map(yearCounts.map((r) => [Number(r.year), Number(r.n)]));
+  const missingYears = expectedYears.filter((y) =>
+    !fs.existsSync(path.join(DIR, `${y}.parquet`)) || !(yearRows.get(y) > 0));
+  check(`every year ${FIRST}-${LAST} has a statcast file with rows`, missingYears.length === 0,
+    `present=${expectedYears.length - missingYears.length}/${expectedYears.length}`
+    + (missingYears.length ? ` missing first: ${missingYears.slice(0, 5).join(',')}` : ''));
 
   await db.close();
   process.exit(failures ? 1 : 0);
