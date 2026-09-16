@@ -378,6 +378,12 @@ git commit -m "refactor: extract cached fetch helpers into tools/lib/fetch.mjs"
   - `data/seasons/{year}.parquet` with columns:
     `year INT, mlbam INT, bbref VARCHAR, name VARCHAR, team VARCHAR, lg VARCHAR, role VARCHAR, pa INT, ab INT, h INT, d2 INT, d3 INT, hr INT, bb INT, so INT, sb INT, cs INT, hbp INT, ipouts INT, er INT, bf INT, p_h INT, p_bb INT, p_so INT, p_hr INT`
   - `role` is `'bat'` or `'pit'`; a two-way player has one row of each.
+  - `data/league/{year}.parquet` — one row per **team-season** from `core/Teams.csv`, columns
+    `year INT, team VARCHAR, lg VARCHAR, g INT, w INT, l INT, r INT, ra INT, ab INT, h INT, d2 INT, d3 INT, hr INT, bb INT, so INT`.
+    Lahman's per-player Batting table carries no team-games, so there is no way to
+    compute a true runs-per-game from it. Teams.csv has both `R` and `G`. Task 7's
+    `sigma()` — the denominator the spec's effect-size ranking divides by — needs an
+    exact league rate, not a proxy, which is why this dataset exists.
 
 Source is Chadwick Bureau's baseballdatabank, which is the maintained Lahman database: `https://raw.githubusercontent.com/chadwickbureau/baseballdatabank/master/core/{Batting,Pitching,People}.csv`. It starts in 1871 and is the only free source that goes back that far for both roles.
 
@@ -439,6 +445,13 @@ function check(label, ok, detail) {
   const noId = (await db.all(
     `SELECT count(*) AS n FROM read_parquet('${glob}') WHERE bbref IS NULL`))[0];
   check('every row carries a player id', Number(noId.n) === 0, `null=${noId.n}`);
+
+  // Team totals: the only Tier A source of team-games, so runs/game is exact.
+  const lg = path.join(ROOT, 'data', 'league', '*.parquet').replace(/\\/g, '/');
+  const rpg = (await db.all(
+    `SELECT sum(r) * 1.0 / sum(g) AS v FROM read_parquet('${lg}') WHERE year = 2019`))[0];
+  check('2019 runs per team-game is ~4.8',
+    Number(rpg.v) > 4.5 && Number(rpg.v) < 5.1, `rpg=${Number(rpg.v).toFixed(3)}`);
 
   await db.close();
   process.exit(failures ? 1 : 0);
@@ -511,9 +524,11 @@ const localise = async (name) => {
   return sqlPath(cachePath(url));
 };
 
-const [batting, pitching, people] = await Promise.all(
-  ['Batting.csv', 'Pitching.csv', 'People.csv'].map(localise));
+const [batting, pitching, people, teams] = await Promise.all(
+  ['Batting.csv', 'Pitching.csv', 'People.csv', 'Teams.csv'].map(localise));
 
+const LEAGUE = path.join(ROOT, 'data', 'league');
+fs.mkdirSync(LEAGUE, { recursive: true });
 fs.mkdirSync(OUT, { recursive: true });
 const db = await openDb();
 
@@ -559,6 +574,14 @@ await db.run(`CREATE VIEW seasons AS
          q.ipouts, q.er, q.bf, q.p_h, q.p_bb, q.p_so, q.p_hr
     FROM pit q JOIN people p USING (bbref)`);
 
+/* Team-season totals. The only place in Tier A that knows how many games a club
+ * actually played, which is what makes an exact runs-per-game possible. */
+await db.run(`CREATE VIEW league AS SELECT
+    yearID AS year, teamID AS team, lgID AS lg,
+    G AS g, W AS w, L AS l, R AS r, RA AS ra,
+    AB AS ab, H AS h, "2B" AS d2, "3B" AS d3, HR AS hr, BB AS bb, SO AS so
+  FROM read_csv_auto('${teams}', header = true)`);
+
 const years = (await db.all('SELECT DISTINCT year FROM seasons ORDER BY year'))
   .map((r) => Number(r.year));
 
@@ -567,6 +590,15 @@ for (const y of years) {
   await db.run(
     `COPY (SELECT * FROM seasons WHERE year = ${y}) TO '${file}' (FORMAT PARQUET)`);
 }
+
+const leagueYears = (await db.all('SELECT DISTINCT year FROM league ORDER BY year'))
+  .map((r) => Number(r.year));
+for (const y of leagueYears) {
+  const file = sqlPath(path.join(LEAGUE, `${y}.parquet`));
+  await db.run(
+    `COPY (SELECT * FROM league WHERE year = ${y}) TO '${file}' (FORMAT PARQUET)`);
+}
+console.log(`league  ${leagueYears.length} seasons of team totals`);
 
 const totals = (await db.all(
   `SELECT role, count(*) AS n FROM seasons GROUP BY role ORDER BY role`));
@@ -579,7 +611,7 @@ await db.close();
 - [ ] **Step 5: Run the builder**
 
 Run: `node tools/build-seasons.mjs`
-Expected: roughly `seasons 1871–2025  files 155`, then a `bat` count above 100,000 and a `pit` count above 40,000. First run downloads ~40 MB; later runs read the cache.
+Expected: roughly `seasons 1871–2025  files 155`, a `league  155 seasons of team totals` line, then a `bat` count above 100,000 and a `pit` count above 40,000. First run downloads ~40 MB; later runs read the cache.
 
 - [ ] **Step 6: Run the test to verify it passes**
 
@@ -753,7 +785,7 @@ git commit -m "feat: build chadwick register id crosswalk parquet"
 - Create: `tests/statcast-data.test.js`
 
 **Interfaces:**
-- Consumes: `getText`, `parseCsv`; `openDb`, `sqlPath`; `data/players.parquet`.
+- Consumes: `getText`, `parseCsv`; `openDb`, `sqlPath`. **Not** `data/players.parquet` — every Savant leaderboard already carries the MLBAM id, so no crosswalk is needed here. The crosswalk is consumed by Task 7, which joins Lahman's `bbref` to it.
 - Produces: `data/statcast/{year}.parquet`, one row per player-season, columns
   `year INT, mlbam INT, name VARCHAR, spd DOUBLE, hp1 DOUBLE, xwoba DOUBLE, ev DOUBLE, la DOUBLE, oaa INT, arm DOUBLE, bat_speed DOUBLE, swing_len DOUBLE`
 
@@ -835,7 +867,7 @@ Create `tools/build-statcast.mjs`:
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getText, parseCsv, pool } from './lib/fetch.mjs';
+import { getText, parseCsv } from './lib/fetch.mjs';
 import { openDb, sqlPath } from './lib/duck.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -1047,6 +1079,8 @@ const PROBES = [
     source: 'Chadwick baseballdatabank', grain: 'player-season' },
   { key: 'caught_stealing', src: SEASONS, where: 'cs IS NOT NULL',
     source: 'Chadwick baseballdatabank', grain: 'player-season' },
+  { key: 'team_totals', src: g('league', '*.parquet'), where: 'g > 0',
+    source: 'Chadwick baseballdatabank', grain: 'team-season' },
   { key: 'sprint_speed', src: STATCAST, where: 'spd IS NOT NULL',
     source: 'Baseball Savant', grain: 'player-season' },
   { key: 'home_to_first', src: STATCAST, where: 'hp1 IS NOT NULL',
@@ -1090,7 +1124,7 @@ await db.close();
 - [ ] **Step 4: Run the builder**
 
 Run: `node tools/build-coverage.mjs`
-Expected: ten aligned lines. `season_batting 1871–2025`, `sprint_speed 2015–2025`, `bat_tracking 2023–2025`.
+Expected: eleven aligned lines. `season_batting 1871–2025`, `sprint_speed 2015–2025`, `bat_tracking 2023–2025`.
 
 - [ ] **Step 5: Run the test to verify it passes**
 
@@ -1240,6 +1274,7 @@ export async function openSpine(dataDir = path.join(ROOT, 'data')) {
   const seasons = sqlPath(path.join(dataDir, 'seasons', '*.parquet'));
   const statcast = sqlPath(path.join(dataDir, 'statcast', '*.parquet'));
   const players = sqlPath(path.join(dataDir, 'players.parquet'));
+  const league = sqlPath(path.join(dataDir, 'league', '*.parquet'));
 
   return {
     async coverage() {
@@ -1276,17 +1311,19 @@ export async function openSpine(dataDir = path.join(ROOT, 'data')) {
      * between consecutive seasons. A rule that shifts runs/game by 3 sigma
      * moved it further than any two real seasons ever did. */
     async sigma(stat, from = 1950, to = 2024) {
+      /* Team-season totals, not per-player lines: only Teams.csv knows how many
+       * games a club played, so these rates are exact rather than proxies. */
       const EXPR = {
-        runs_per_game: 'sum(h + bb) * 1.0 / count(DISTINCT team)',
-        home_runs_per_game: 'sum(hr) * 1.0 / count(DISTINCT team)',
-        strikeout_rate: 'sum(so) * 1.0 / sum(pa)',
-        walk_rate: 'sum(bb) * 1.0 / sum(pa)',
+        runs_per_game: 'sum(r) * 1.0 / sum(g)',
+        home_runs_per_game: 'sum(hr) * 1.0 / sum(g)',
+        strikeout_rate: 'sum(so) * 1.0 / (sum(ab) + sum(bb))',
+        walk_rate: 'sum(bb) * 1.0 / (sum(ab) + sum(bb))',
         batting_average: 'sum(h) * 1.0 / sum(ab)',
       };
       if (!EXPR[stat]) throw new Error(`sigma: unknown stat ${stat}`);
       const rows = await db.all(
-        `SELECT year, ${EXPR[stat]} AS v FROM read_parquet('${seasons}')
-          WHERE role = 'bat' AND year BETWEEN ${from} AND ${to}
+        `SELECT year, ${EXPR[stat]} AS v FROM read_parquet('${league}')
+          WHERE year BETWEEN ${from} AND ${to}
           GROUP BY year ORDER BY year`);
       const deltas = [];
       for (let i = 1; i < rows.length; i++) deltas.push(Number(rows[i].v) - Number(rows[i - 1].v));
@@ -1304,7 +1341,7 @@ export async function openSpine(dataDir = path.join(ROOT, 'data')) {
 Run: `node tests/spine-query.test.js`
 Expected: twelve `ok` lines, exit 0.
 
-If "season-to-season sigma is a small positive number" fails high, the `runs_per_game` expression is a proxy — swap it for a real runs column once Tier B events land, and relax the bound to `sd > 0` with a comment pointing at plan 1b.
+`sigma('runs_per_game', 2000, 2024)` should land near 0.15–0.35: that is how much league runs per team-game really moves between consecutive seasons, and it is the denominator the diagnostics divide by. If it comes back above 1.5, check that `data/league/*.parquet` exists and that `sum(g)` is team-games and not doubled.
 
 If `teamLineup` returns zero rows, check the team code: Lahman uses `LAN` for the Dodgers and `NYA` for the Yankees, not `LAD`/`NYY`. That mapping belongs in Task 8's notes, not a silent fix here.
 
@@ -1342,8 +1379,10 @@ Create `tools/build-spine.mjs`:
  *
  *   node tools/build-spine.mjs
  *
- * Order matters: statcast joins through players.parquet, and coverage.json is
- * measured from everything else, so it runs last.
+ * Order matters only at the end: coverage.json is measured from everything else,
+ * so it runs last. The first three are independent — statcast does NOT join
+ * through players.parquet, because every Savant leaderboard already carries the
+ * MLBAM id. The crosswalk is consumed by the query layer, not by the builders.
  */
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
