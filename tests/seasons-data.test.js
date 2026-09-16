@@ -107,6 +107,33 @@ function check(label, ok, detail) {
   check('no player-season duplicated across clubs (all years)', dupeRows.length === 0,
     `dupes=${dupeRows.length}${dupeDetail ? ` first: ${dupeDetail}` : ''}`);
 
+  // A short parquet file is byte-indistinguishable from a complete one, so
+  // "the files exist" proves nothing about whether the build lost a club.
+  // The builder's manifest is the positive check; `complete` is the flag
+  // later tasks gate on.
+  const manifestPath = path.join(ROOT, 'data', '_build.json');
+  let manifest = null;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  } catch (e) {
+    manifest = null;
+  }
+  check('build manifest exists and reports a complete build',
+    manifest !== null && manifest.complete === true,
+    manifest === null
+      ? `unreadable ${manifestPath} — rerun \`node tools/build-seasons.mjs\``
+      : `complete=${manifest.complete} years=${(manifest.years || []).length}`
+        + ` failures=${(manifest.failures || []).length}`);
+
+  const shortYears = ((manifest && manifest.years) || [])
+    .filter((y) => Number(y.clubsFetched) < Number(y.clubsExpected));
+  check('no year lost a club during the build', manifest !== null && shortYears.length === 0,
+    `short=${shortYears.length}`
+    + (shortYears.length
+      ? ` first: ${shortYears.slice(0, 3)
+        .map((y) => `${y.year} ${y.clubsFetched}/${y.clubsExpected}`).join(', ')}`
+      : ''));
+
   // Team totals: the only Tier A source of team-games, so runs/game is exact.
   const rpg = (await db.all(
     `SELECT sum(r) * 1.0 / sum(g) AS v FROM read_parquet('${lg}') WHERE year = 2019`))[0];

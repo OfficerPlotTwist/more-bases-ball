@@ -26,6 +26,7 @@ import { openDb, sqlPath } from './lib/duck.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(ROOT, 'data', 'seasons');
 const LEAGUE = path.join(ROOT, 'data', 'league');
+const MANIFEST = path.join(ROOT, 'data', '_build.json');
 const TMP = path.join(ROOT, 'data', '.cache', 'seasons-tmp');
 const API = 'https://statsapi.mlb.com/api/v1';
 
@@ -99,7 +100,30 @@ const leagueYears = [];
 let totalBat = 0;
 let totalPit = 0;
 const failures = [];
+/* Per-year accounting for data/_build.json. A short parquet file is
+ * byte-indistinguishable from a complete one, so the manifest is what
+ * downstream tasks check; `complete` is the single flag they gate on. */
+const years = [];
+const startedAt = new Date().toISOString();
+let finishedLoop = false;
 
+const writeManifest = () => {
+  const complete = finishedLoop && failures.length === 0
+    && years.every((y) => y.clubsFetched === y.clubsExpected);
+  fs.writeFileSync(MANIFEST, `${JSON.stringify({
+    tool: 'build-seasons.mjs',
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    complete,
+    firstYear: FIRST,
+    lastYear: LAST,
+    years,
+    failures,
+  }, null, 2)}\n`);
+  return complete;
+};
+
+try {
 for (let year = FIRST; year <= LAST; year++) {
   const list = await getJson(`${API}/teams?sportId=1&season=${year}`);
   const clubs = (list.teams || []).filter((t) => t.sport && t.sport.id === 1);
@@ -116,56 +140,69 @@ for (let year = FIRST; year <= LAST; year++) {
       + `&hydrate=person(stats(type=season,group=hitting,season=${year},team))`;
     const pitUrl = `${API}/teams/${club.id}/roster?season=${year}&rosterType=fullSeason`
       + `&hydrate=person(stats(type=season,group=pitching,season=${year},team))`;
+    /* The try wraps the FETCH ONLY — the same shape the league-stats
+     * fetch below uses. Row building must stay outside it: a TypeError
+     * from a code bug has to crash the build, not be printed as a WARN
+     * and silently degraded into "one club had a transient problem".
+     * If that means a genuinely malformed payload aborts the run, that
+     * is the correct trade — it is a bug worth surfacing. */
+    let hj;
+    let pj;
     try {
-      const [hj, pj] = await Promise.all([getJson(hitUrl), getJson(pitUrl)]);
-      const rows = [];
-
-      for (const spot of hj.roster || []) {
-        const stats = spot.person && spot.person.stats && spot.person.stats[0];
-        const split = ownSplit(stats, club.id);
-        const st = split && split.stat;
-        if (!st) continue;
-        rows.push({
-          year, mlbam: spot.person.id, bbref: null, name: spot.person.fullName,
-          pos: (spot.position && spot.position.abbreviation) || null,
-          team: club.abbreviation, lg, role: 'bat',
-          pa: st.plateAppearances ?? null, ab: st.atBats ?? null, h: st.hits ?? null,
-          d2: st.doubles ?? null, d3: st.triples ?? null, hr: st.homeRuns ?? null,
-          bb: st.baseOnBalls ?? null, so: st.strikeOuts ?? null,
-          sb: st.stolenBases ?? null, cs: st.caughtStealing ?? null,
-          hbp: st.hitByPitch ?? null,
-          ipouts: null, er: null, bf: null, p_h: null, p_bb: null, p_so: null, p_hr: null,
-        });
-      }
-      for (const spot of pj.roster || []) {
-        const stats = spot.person && spot.person.stats && spot.person.stats[0];
-        const split = ownSplit(stats, club.id);
-        const st = split && split.stat;
-        if (!st) continue;
-        rows.push({
-          year, mlbam: spot.person.id, bbref: null, name: spot.person.fullName,
-          pos: (spot.position && spot.position.abbreviation) || null,
-          team: club.abbreviation, lg, role: 'pit',
-          pa: null, ab: null, h: null, d2: null, d3: null, hr: null, bb: null, so: null,
-          sb: null, cs: null, hbp: null,
-          ipouts: toOuts(st.inningsPitched), er: st.earnedRuns ?? null,
-          bf: st.battersFaced ?? null, p_h: st.hits ?? null, p_bb: st.baseOnBalls ?? null,
-          p_so: st.strikeOuts ?? null, p_hr: st.homeRuns ?? null,
-        });
-      }
-      return { ok: true, rows };
+      [hj, pj] = await Promise.all([getJson(hitUrl), getJson(pitUrl)]);
     } catch (e) {
       const reason = (e && e.message) || String(e);
       failures.push({ year, club: club.abbreviation, error: reason });
       console.log(`WARN ${year} ${club.abbreviation}: ${reason}`);
       return { ok: false, rows: [] };
     }
+
+    const rows = [];
+    for (const spot of hj.roster || []) {
+      const stats = spot.person && spot.person.stats && spot.person.stats[0];
+      const split = ownSplit(stats, club.id);
+      const st = split && split.stat;
+      if (!st) continue;
+      rows.push({
+        year, mlbam: spot.person.id, bbref: null, name: spot.person.fullName,
+        pos: (spot.position && spot.position.abbreviation) || null,
+        team: club.abbreviation, lg, role: 'bat',
+        pa: st.plateAppearances ?? null, ab: st.atBats ?? null, h: st.hits ?? null,
+        d2: st.doubles ?? null, d3: st.triples ?? null, hr: st.homeRuns ?? null,
+        bb: st.baseOnBalls ?? null, so: st.strikeOuts ?? null,
+        sb: st.stolenBases ?? null, cs: st.caughtStealing ?? null,
+        hbp: st.hitByPitch ?? null,
+        ipouts: null, er: null, bf: null, p_h: null, p_bb: null, p_so: null, p_hr: null,
+      });
+    }
+    for (const spot of pj.roster || []) {
+      const stats = spot.person && spot.person.stats && spot.person.stats[0];
+      const split = ownSplit(stats, club.id);
+      const st = split && split.stat;
+      if (!st) continue;
+      rows.push({
+        year, mlbam: spot.person.id, bbref: null, name: spot.person.fullName,
+        pos: (spot.position && spot.position.abbreviation) || null,
+        team: club.abbreviation, lg, role: 'pit',
+        pa: null, ab: null, h: null, d2: null, d3: null, hr: null, bb: null, so: null,
+        sb: null, cs: null, hbp: null,
+        ipouts: toOuts(st.inningsPitched), er: st.earnedRuns ?? null,
+        bf: st.battersFaced ?? null, p_h: st.hits ?? null, p_bb: st.baseOnBalls ?? null,
+        p_so: st.strikeOuts ?? null, p_hr: st.homeRuns ?? null,
+      });
+    }
+    return { ok: true, rows };
   });
 
   const fetchedClubs = perClub.filter((r) => r.ok).length;
   if (fetchedClubs !== clubs.length) {
     console.log(`WARN ${year}: expected ${clubs.length} clubs, fetched ${fetchedClubs}`);
   }
+  const entry = {
+    year, clubsExpected: clubs.length, clubsFetched: fetchedClubs,
+    seasonRows: 0, leagueRows: 0,
+  };
+  years.push(entry);
 
   const rows = perClub.flatMap((r) => r.rows);
   if (rows.length) {
@@ -177,6 +214,7 @@ for (let year = FIRST; year <= LAST; year++) {
       TO '${outFile}' (FORMAT PARQUET)`);
     fs.rmSync(tmpFile);
     seasonYears.push(year);
+    entry.seasonRows = rows.length;
     totalBat += rows.filter((r) => r.role === 'bat').length;
     totalPit += rows.filter((r) => r.role === 'pit').length;
   }
@@ -223,7 +261,15 @@ for (let year = FIRST; year <= LAST; year++) {
       FROM read_json_auto('${src}')) TO '${outFile}' (FORMAT PARQUET)`);
     fs.rmSync(tmpFile);
     leagueYears.push(year);
+    entry.leagueRows = leagueRows.length;
   }
+}
+finishedLoop = true;
+} finally {
+  /* Always written, including when the loop throws: a manifest saying
+   * complete:false is the whole point, and a MISSING manifest tells a
+   * later reader nothing at all. */
+  writeManifest();
 }
 
 fs.rmSync(TMP, { recursive: true, force: true });
@@ -237,11 +283,22 @@ console.log(`  pit  ${totalPit} player-seasons`);
 
 await db.close();
 
+const short = years.filter((y) => y.clubsFetched !== y.clubsExpected);
+console.log(`manifest ${MANIFEST}  complete=${failures.length === 0 && short.length === 0}`);
+
 /* A partial spine must never exit 0 — silent partial data is exactly what
- * would let coverage.json (Task 6) measure a truncated dataset as complete. */
-if (failures.length) {
-  console.log(`\n${failures.length} fetch failure(s):`);
-  for (const f of failures) console.log(`  ${f.year} ${f.club}: ${f.error}`);
+ * would let coverage.json (Task 6) measure a truncated dataset as complete.
+ * The manifest is what downstream code CHECKS; the exit code is for the
+ * human or CI watching the run. Both, not either. */
+if (failures.length || short.length) {
+  if (failures.length) {
+    console.log(`\n${failures.length} fetch failure(s):`);
+    for (const f of failures) console.log(`  ${f.year} ${f.club}: ${f.error}`);
+  }
+  if (short.length) {
+    console.log(`\n${short.length} year(s) short of their club count:`);
+    for (const y of short) console.log(`  ${y.year}: ${y.clubsFetched}/${y.clubsExpected}`);
+  }
   process.exitCode = 1;
 }
 }
