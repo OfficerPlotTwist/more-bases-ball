@@ -50,6 +50,41 @@ function normaliseRow(row) {
 }
 const normaliseRows = (rows) => rows.map(normaliseRow);
 
+/* Validation guards for the SQL boundary. seasonLines/teamLineup/sigma
+ * interpolate these values into SQL text (DuckDB's Node binding has no
+ * parameterised-query path through read_parquet in the version pinned here),
+ * so this module IS the trust boundary between caller-supplied values and the
+ * query string. Throw on anything unexpected rather than sanitising, so a
+ * caller passing garbage learns that instead of getting quietly-wrong rows. */
+const TEAM_RE = /^[A-Z]{2,4}(-[A-Z])?$/;
+
+function checkYear(year, label = 'year') {
+  if (!Number.isInteger(year)) throw new Error(`spine: ${label} must be an integer`);
+  return year;
+}
+
+function checkTeam(team) {
+  if (typeof team !== 'string' || !TEAM_RE.test(team)) {
+    throw new Error(`spine: team must match ${TEAM_RE} (got ${JSON.stringify(team)})`);
+  }
+  return team;
+}
+
+function checkRole(role) {
+  if (role !== 'bat' && role !== 'pit') {
+    throw new Error(`spine: role must be 'bat' or 'pit' (got ${JSON.stringify(role)})`);
+  }
+  return role;
+}
+
+function checkCount(value, label) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    throw new Error(`spine: ${label} must be a non-negative number (got ${JSON.stringify(value)})`);
+  }
+  return n;
+}
+
 export async function openSpine(dataDir = path.join(ROOT, 'data'), opts = {}) {
   const manifestPath = path.join(dataDir, '_build.json');
   if (!opts.allowIncomplete) {
@@ -60,7 +95,7 @@ export async function openSpine(dataDir = path.join(ROOT, 'data'), opts = {}) {
     const m = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     if (m.complete !== true) {
       throw new Error('openSpine: spine build reports complete=false '
-        + `(${m.failures.length} failures). Refusing to serve partial data.`);
+        + `(${(m.failures || []).length} failures). Refusing to serve partial data.`);
     }
   }
 
@@ -81,6 +116,10 @@ export async function openSpine(dataDir = path.join(ROOT, 'data'), opts = {}) {
     },
 
     async seasonLines({ year, role = 'bat', minPA = 0, limit = 0 }) {
+      checkYear(year);
+      checkRole(role);
+      minPA = checkCount(minPA, 'minPA');
+      limit = checkCount(limit, 'limit');
       const gate = role === 'bat' ? `pa >= ${minPA}` : 'ipouts > 0';
       const rows = await db.all(
         `SELECT * FROM read_parquet('${seasons}')
@@ -96,6 +135,9 @@ export async function openSpine(dataDir = path.join(ROOT, 'data'), opts = {}) {
      * Same shape data.js hands sim.js today, so the simulator does not care
      * which one it is fed. */
     async teamLineup({ year, team, size = 9 }) {
+      checkYear(year);
+      checkTeam(team);
+      size = checkCount(size, 'size');
       const rows = await db.all(
         `SELECT s.name, s.pos, s.team, s.pa, s.h, s.d2, s.d3, s.hr,
                 s.bb + COALESCE(s.hbp, 0) AS bb, s.so,
@@ -115,6 +157,8 @@ export async function openSpine(dataDir = path.join(ROOT, 'data'), opts = {}) {
      * totals, not per-player lines: only the league dataset knows how many
      * games a club played, so these rates are exact rather than proxies. */
     async sigma(stat, from = 1950, to = 2024) {
+      checkYear(from, 'from');
+      checkYear(to, 'to');
       const EXPR = {
         runs_per_game: 'sum(r) * 1.0 / sum(g)',
         home_runs_per_game: 'sum(hr) * 1.0 / sum(g)',

@@ -119,6 +119,56 @@ function check(label, ok, detail) {
   check('season-to-season sigma is a small positive number',
     sd > 0 && sd < 1.5, `sigma=${sd}`);
 
+  // SQL-injection regression: these two exact payloads were demonstrated to
+  // defeat the year and team filters respectively (returning cross-season /
+  // cross-team rows) before the boundary validation was added. They must
+  // throw now, and a valid call must still return the untampered lineup.
+  let yearInjectionThrew = false;
+  try {
+    await s.teamLineup({ year: '2024 OR 1=1', team: 'LAD' });
+  } catch (e) {
+    yearInjectionThrew = true;
+  }
+  check('teamLineup rejects a year-filter injection payload', yearInjectionThrew);
+
+  let teamInjectionThrew = false;
+  try {
+    await s.teamLineup({ year: 2024, team: "LAD' OR '1'='1" });
+  } catch (e) {
+    teamInjectionThrew = true;
+  }
+  check('teamLineup rejects a team-filter injection payload', teamInjectionThrew);
+
+  const ladAfterGuards = await s.teamLineup({ year: 2024, team: 'LAD' });
+  check('valid LAD call is unchanged by the new guards',
+    ladAfterGuards.length === 9 && ladAfterGuards[0].name === 'Shohei Ohtani',
+    JSON.stringify(ladAfterGuards[0]));
+
+  // Same shape of guard applies to seasonLines and sigma.
+  let seasonLinesInjectionThrew = false;
+  try {
+    await s.seasonLines({ year: '2024 OR 1=1', role: 'bat' });
+  } catch (e) {
+    seasonLinesInjectionThrew = true;
+  }
+  check('seasonLines rejects a non-integer year', seasonLinesInjectionThrew);
+
+  let roleInjectionThrew = false;
+  try {
+    await s.seasonLines({ year: 2024, role: "bat' OR '1'='1" });
+  } catch (e) {
+    roleInjectionThrew = true;
+  }
+  check('seasonLines rejects an unrecognised role', roleInjectionThrew);
+
+  let sigmaYearThrew = false;
+  try {
+    await s.sigma('runs_per_game', '2000 OR 1=1', 2024);
+  } catch (e) {
+    sigmaYearThrew = true;
+  }
+  check('sigma rejects a non-integer from-year', sigmaYearThrew);
+
   await s.close();
   process.exit(failures ? 1 : 0);
 })();
