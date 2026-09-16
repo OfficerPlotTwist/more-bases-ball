@@ -166,7 +166,7 @@ export async function openSpine(dataDir = path.join(ROOT, 'data'), opts = {}) {
         walk_rate: 'sum(bb) * 1.0 / (sum(ab) + sum(bb))',
         batting_average: 'sum(h) * 1.0 / sum(ab)',
       };
-      if (!EXPR[stat]) throw new Error(`sigma: unknown stat ${stat}`);
+      if (!Object.hasOwn(EXPR, stat)) throw new Error(`sigma: unknown stat ${stat}`);
       const rows = await db.all(
         `SELECT year, ${EXPR[stat]} AS v FROM read_parquet('${league}')
           WHERE year BETWEEN ${from} AND ${to}

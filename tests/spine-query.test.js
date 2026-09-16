@@ -84,6 +84,26 @@ function check(label, ok, detail) {
     fs.rmSync(incompleteDir, { recursive: true, force: true });
   }
 
+  // Finding 5 regression: a complete:false manifest with NO failures key must
+  // still raise the refusal message, not a raw TypeError from reading
+  // m.failures.length off undefined.
+  const noFailuresDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'spine-nofailures-'));
+  try {
+    fs.writeFileSync(path.join(noFailuresDir, '_build.json'), JSON.stringify({ complete: false }));
+    let caught = null;
+    try {
+      await spine.openSpine(noFailuresDir);
+    } catch (e) {
+      caught = e;
+    }
+    check('openSpine throws (not TypeError) on complete:false with no failures key',
+      caught instanceof Error && !(caught instanceof TypeError), String(caught));
+    check('refusal message is the intended one, not a raw TypeError',
+      !!caught && /complete=false/.test(caught.message), caught && caught.message);
+  } finally {
+    fs.rmSync(noFailuresDir, { recursive: true, force: true });
+  }
+
   if (!fs.existsSync(path.join(ROOT, 'data', 'coverage.json'))) {
     console.log('skip  data/ not built — query assertions skipped');
     process.exit(failures ? 1 : 0);
@@ -123,21 +143,25 @@ function check(label, ok, detail) {
   // defeat the year and team filters respectively (returning cross-season /
   // cross-team rows) before the boundary validation was added. They must
   // throw now, and a valid call must still return the untampered lineup.
-  let yearInjectionThrew = false;
+  let yearInjectionErr = null;
   try {
     await s.teamLineup({ year: '2024 OR 1=1', team: 'LAD' });
   } catch (e) {
-    yearInjectionThrew = true;
+    yearInjectionErr = e;
   }
-  check('teamLineup rejects a year-filter injection payload', yearInjectionThrew);
+  check('teamLineup rejects a year-filter injection payload',
+    !!yearInjectionErr && /year must be an integer/.test(yearInjectionErr.message),
+    yearInjectionErr && yearInjectionErr.message);
 
-  let teamInjectionThrew = false;
+  let teamInjectionErr = null;
   try {
     await s.teamLineup({ year: 2024, team: "LAD' OR '1'='1" });
   } catch (e) {
-    teamInjectionThrew = true;
+    teamInjectionErr = e;
   }
-  check('teamLineup rejects a team-filter injection payload', teamInjectionThrew);
+  check('teamLineup rejects a team-filter injection payload',
+    !!teamInjectionErr && /team must match/.test(teamInjectionErr.message),
+    teamInjectionErr && teamInjectionErr.message);
 
   const ladAfterGuards = await s.teamLineup({ year: 2024, team: 'LAD' });
   check('valid LAD call is unchanged by the new guards',
@@ -145,29 +169,62 @@ function check(label, ok, detail) {
     JSON.stringify(ladAfterGuards[0]));
 
   // Same shape of guard applies to seasonLines and sigma.
-  let seasonLinesInjectionThrew = false;
+  let seasonLinesInjectionErr = null;
   try {
     await s.seasonLines({ year: '2024 OR 1=1', role: 'bat' });
   } catch (e) {
-    seasonLinesInjectionThrew = true;
+    seasonLinesInjectionErr = e;
   }
-  check('seasonLines rejects a non-integer year', seasonLinesInjectionThrew);
+  check('seasonLines rejects a non-integer year',
+    !!seasonLinesInjectionErr && /year must be an integer/.test(seasonLinesInjectionErr.message),
+    seasonLinesInjectionErr && seasonLinesInjectionErr.message);
 
-  let roleInjectionThrew = false;
+  let roleInjectionErr = null;
   try {
     await s.seasonLines({ year: 2024, role: "bat' OR '1'='1" });
   } catch (e) {
-    roleInjectionThrew = true;
+    roleInjectionErr = e;
   }
-  check('seasonLines rejects an unrecognised role', roleInjectionThrew);
+  check('seasonLines rejects an unrecognised role',
+    !!roleInjectionErr && /role must be/.test(roleInjectionErr.message),
+    roleInjectionErr && roleInjectionErr.message);
 
-  let sigmaYearThrew = false;
+  let sigmaYearErr = null;
   try {
     await s.sigma('runs_per_game', '2000 OR 1=1', 2024);
   } catch (e) {
-    sigmaYearThrew = true;
+    sigmaYearErr = e;
   }
-  check('sigma rejects a non-integer from-year', sigmaYearThrew);
+  check('sigma rejects a non-integer from-year',
+    !!sigmaYearErr && /from must be an integer/.test(sigmaYearErr.message),
+    sigmaYearErr && sigmaYearErr.message);
+
+  // Finding 4 regression: EXPR is a plain object literal, so a naive
+  // `!EXPR[stat]` guard is bypassed by any key inherited from
+  // Object.prototype — the stringified function body then reaches the SQL
+  // template and surfaces as a DuckDB parser error instead of the intended
+  // "unknown stat" message. Use these exact five keys; they are the proof.
+  for (const key of ['toString', 'constructor', '__proto__', 'hasOwnProperty', 'valueOf']) {
+    let err = null;
+    try {
+      await s.sigma(key, 2000, 2024);
+    } catch (e) {
+      err = e;
+    }
+    check(`sigma rejects prototype key '${key}' with the unknown-stat message`,
+      !!err && err.message === `sigma: unknown stat ${key}`, err && err.message);
+  }
+
+  // sigma still rejects a genuinely unknown stat the normal way.
+  let unknownStatErr = null;
+  try {
+    await s.sigma('nope', 2000, 2024);
+  } catch (e) {
+    unknownStatErr = e;
+  }
+  check('sigma rejects an ordinary unknown stat',
+    !!unknownStatErr && unknownStatErr.message === 'sigma: unknown stat nope',
+    unknownStatErr && unknownStatErr.message);
 
   await s.close();
   process.exit(failures ? 1 : 0);
