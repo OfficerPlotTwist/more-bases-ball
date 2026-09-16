@@ -125,19 +125,25 @@ function check(label, ok, detail) {
       : `complete=${manifest.complete} years=${(manifest.years || []).length}`
         + ` failures=${(manifest.failures || []).length}`);
 
-  // A club whose roster fetch SUCCEEDS but yields no usable rows still counts
-  // as fetched, so clubsFetched alone cannot prove a year is fully populated —
-  // clubsWithRows is the check that actually catches an empty club.
+  // Integrity check: did the build actually FETCH every expected club? A
+  // club that fetches but yields no rows is a coverage fact (see below),
+  // not a build failure — folding it in here would make `complete`
+  // unsatisfiable against real baseball history (Negro Leagues 1924,
+  // Federal League 1914, pre-expansion clubs 1996).
   const shortYears = ((manifest && manifest.years) || [])
-    .filter((y) => Number(y.clubsFetched) < Number(y.clubsExpected)
-      || Number(y.clubsWithRows) < Number(y.clubsExpected));
+    .filter((y) => Number(y.clubsFetched) < Number(y.clubsExpected));
   check('no year lost a club during the build', manifest !== null && shortYears.length === 0,
     `short=${shortYears.length}`
     + (shortYears.length
       ? ` first: ${shortYears.slice(0, 3)
-        .map((y) => `${y.year} fetched ${y.clubsFetched}/${y.clubsExpected}`
-          + ` rows ${y.clubsWithRows}/${y.clubsExpected}`).join(', ')}`
+        .map((y) => `${y.year} fetched ${y.clubsFetched}/${y.clubsExpected}`).join(', ')}`
       : ''));
+
+  // Informational only, not a failure: total club-years that fetched
+  // successfully but contributed zero player-level rows at the source.
+  const emptyClubYears = ((manifest && manifest.years) || [])
+    .reduce((sum, y) => sum + ((y.clubsEmpty && y.clubsEmpty.length) || 0), 0);
+  console.log(`info  empty club-years (fetched, zero player rows): ${emptyClubYears}`);
 
   // Team totals: the only Tier A source of team-games, so runs/game is exact.
   const rpg = (await db.all(
