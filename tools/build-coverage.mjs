@@ -27,32 +27,44 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = path.join(ROOT, 'data');
 const g = (...p) => sqlPath(path.join(DATA, ...p));
 
-const SEASONS = g('seasons', '*.parquet');
-const STATCAST = g('statcast', '*.parquet');
+/* A probe's `source` is derived from which Parquet dataset it reads, not
+ * declared per-probe — a probe can no longer claim an origin different from
+ * the file it actually queries, because it does not get to state one. */
+const DATASET_SOURCE = {
+  seasons:  { label: 'MLB Stats API (statsapi.mlb.com)', builder: 'build-seasons.mjs',  needle: 'statsapi.mlb.com' },
+  league:   { label: 'MLB Stats API (statsapi.mlb.com)', builder: 'build-seasons.mjs',  needle: 'statsapi.mlb.com' },
+  statcast: { label: 'Baseball Savant',                  builder: 'build-statcast.mjs', needle: 'baseballsavant.mlb.com' },
+};
+const DATASET_GLOB = {
+  seasons: g('seasons', '*.parquet'),
+  league: g('league', '*.parquet'),
+  statcast: g('statcast', '*.parquet'),
+};
+const STATCAST = DATASET_GLOB.statcast;
 
 const PROBES = [
-  { key: 'season_batting', src: SEASONS, where: "role = 'bat' AND pa > 0",
-    source: 'MLB Stats API (statsapi.mlb.com)', grain: 'player-season' },
-  { key: 'season_pitching', src: SEASONS, where: "role = 'pit' AND ipouts > 0",
-    source: 'MLB Stats API (statsapi.mlb.com)', grain: 'player-season' },
-  { key: 'strikeouts', src: SEASONS, where: "role = 'bat' AND so IS NOT NULL",
-    source: 'MLB Stats API (statsapi.mlb.com)', grain: 'player-season' },
-  { key: 'caught_stealing', src: SEASONS, where: 'cs IS NOT NULL',
-    source: 'MLB Stats API (statsapi.mlb.com)', grain: 'player-season' },
-  { key: 'team_totals', src: g('league', '*.parquet'), where: 'g > 0',
-    source: 'MLB Stats API (statsapi.mlb.com)', grain: 'team-season' },
-  { key: 'sprint_speed', src: STATCAST, where: 'spd IS NOT NULL',
-    source: 'Baseball Savant', grain: 'player-season', statcast: true },
-  { key: 'home_to_first', src: STATCAST, where: 'hp1 IS NOT NULL',
-    source: 'Baseball Savant', grain: 'player-season', statcast: true },
-  { key: 'batted_ball_tracking', src: STATCAST, where: 'ev IS NOT NULL',
-    source: 'Baseball Savant', grain: 'player-season', statcast: true },
-  { key: 'outs_above_average', src: STATCAST, where: 'oaa IS NOT NULL',
-    source: 'Baseball Savant', grain: 'player-season', statcast: true },
-  { key: 'arm_strength', src: STATCAST, where: 'arm IS NOT NULL',
-    source: 'Baseball Savant', grain: 'player-season', statcast: true },
-  { key: 'bat_tracking', src: STATCAST, where: 'bat_speed IS NOT NULL',
-    source: 'Baseball Savant', grain: 'player-season', statcast: true },
+  { key: 'season_batting', dataset: 'seasons', where: "role = 'bat' AND pa > 0",
+    grain: 'player-season' },
+  { key: 'season_pitching', dataset: 'seasons', where: "role = 'pit' AND ipouts > 0",
+    grain: 'player-season' },
+  { key: 'strikeouts', dataset: 'seasons', where: "role = 'bat' AND so IS NOT NULL",
+    grain: 'player-season' },
+  { key: 'caught_stealing', dataset: 'seasons', where: 'cs IS NOT NULL',
+    grain: 'player-season' },
+  { key: 'team_totals', dataset: 'league', where: 'g > 0',
+    grain: 'team-season' },
+  { key: 'sprint_speed', dataset: 'statcast', where: 'spd IS NOT NULL',
+    grain: 'player-season', statcast: true },
+  { key: 'home_to_first', dataset: 'statcast', where: 'hp1 IS NOT NULL',
+    grain: 'player-season', statcast: true },
+  { key: 'batted_ball_tracking', dataset: 'statcast', where: 'ev IS NOT NULL',
+    grain: 'player-season', statcast: true },
+  { key: 'outs_above_average', dataset: 'statcast', where: 'oaa IS NOT NULL',
+    grain: 'player-season', statcast: true },
+  { key: 'arm_strength', dataset: 'statcast', where: 'arm IS NOT NULL',
+    grain: 'player-season', statcast: true },
+  { key: 'bat_tracking', dataset: 'statcast', where: 'bat_speed IS NOT NULL',
+    grain: 'player-season', statcast: true },
 ];
 
 /* --- Refusal gate: never measure coverage against an unverified spine. --- */
@@ -83,10 +95,12 @@ for (const p of PROBES) {
    * get teams/teamYearsPerSeason, and never both. */
   const isTeamGrain = p.grain === 'team-season';
   const idCol = isTeamGrain ? 'team' : 'mlbam';
+  const src = DATASET_GLOB[p.dataset];
+  const source = DATASET_SOURCE[p.dataset].label;
   const r = (await db.all(
     `SELECT min(year) AS first, max(year) AS last, count(*) AS rows,
             count(DISTINCT ${idCol}) AS entities
-       FROM read_parquet('${p.src}') WHERE ${p.where}`))[0];
+       FROM read_parquet('${src}') WHERE ${p.where}`))[0];
   if (r.first == null) {
     console.log(`WARN  ${p.key}: no rows matched — omitted from coverage`);
     continue;
@@ -97,9 +111,9 @@ for (const p of PROBES) {
   const entities = Number(r.entities);
   const perSeason = Math.round(rows / (last - first + 1));
   stats[p.key] = isTeamGrain
-    ? { first, last, rows, source: p.source, grain: p.grain,
+    ? { first, last, rows, source, dataset: p.dataset, grain: p.grain,
         teams: entities, teamYearsPerSeason: perSeason }
-    : { first, last, rows, source: p.source, grain: p.grain,
+    : { first, last, rows, source, dataset: p.dataset, grain: p.grain,
         players: entities, playerYearsPerSeason: perSeason };
   if (p.statcast) stats[p.key]._statcastPlayers = entities;
 }
@@ -121,11 +135,21 @@ for (const p of PROBES) {
  * "roughly half the population" only against xwoba, not against sprint_speed. */
 const statcastKeys = Object.keys(stats).filter((k) => PROBES.find((p) => p.key === k)?.statcast);
 if (statcastKeys.length) {
-  const IDENTITY_COLS = new Set(['year', 'mlbam', 'name']);
+  /* Filter by TYPE, not by a name denylist. A denylist is fragile the same
+   * way a hardcoded column list is: if build-statcast.mjs later adds a
+   * near-universally-populated categorical column (team, pos, game_date), a
+   * name-based exclusion has to be remembered and updated, and forgetting it
+   * would silently make that column "widest" and depress every ratio. A
+   * numeric-type filter needs no such reminder — team/pos arrive as VARCHAR
+   * and game_date as DATE, neither of which can enter the comparison. year
+   * and mlbam are numeric and still have to be excluded explicitly. */
+  const IDENTITY_COLS = new Set(['year', 'mlbam']);
+  const NUMERIC_TYPE = /^(DOUBLE|FLOAT|DECIMAL|(TINY|SMALL|BIG|HUGE)?INT(EGER)?(HUGE)?)/i;
   const schema = await db.all(`DESCRIBE SELECT * FROM read_parquet('${STATCAST}')`);
   const candidateCols = schema
-    .map((row) => row.column_name)
-    .filter((col) => !IDENTITY_COLS.has(col));
+    .filter((row) => NUMERIC_TYPE.test(row.column_type) && !IDENTITY_COLS.has(row.column_name))
+    .map((row) => row.column_name);
+  console.log(`populationVsWidest candidate columns: ${candidateCols.join(', ')}`);
 
   const wideRow = (await db.all(
     `SELECT ${candidateCols

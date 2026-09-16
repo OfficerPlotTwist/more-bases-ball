@@ -81,27 +81,35 @@ check('leagueOnlySeasons.totalEmptyClubYears === 111',
 check('leagueOnlySeasons.years["1924"] is non-empty',
   !!(los && Array.isArray(los.years['1924']) && los.years['1924'].length > 0));
 
-// Provenance guard: a `source` string is not free prose. Every distinct
-// source value in coverage.json must be traceable to a URL some builder
-// actually fetches — a plain substring search against that builder's own
-// source text — so a source string can't silently drift from reality across
-// commits the way "Chadwick baseballdatabank" (a dead, 404ing repo) did.
-const SOURCE_URLS = {
-  'MLB Stats API (statsapi.mlb.com)':
-    { builder: 'build-seasons.mjs', needle: 'statsapi.mlb.com' },
-  'Baseball Savant':
-    { builder: 'build-statcast.mjs', needle: 'baseballsavant.mlb.com' },
+// Provenance guard: `source` is derived per-stat from the `dataset` a probe
+// actually reads (build-coverage.mjs's DATASET_SOURCE), not declared prose —
+// each stat carries its own `dataset`, so this checks a real correspondence
+// (this stat's source actually matches the file it queried) rather than
+// deduping label strings and asking only "does the named builder's file
+// mention this URL somewhere," which would pass even if a probe's data path
+// and its label disagreed, and destroyed per-stat traceability by deduping.
+const DATASET_SOURCE = {
+  seasons:  { label: 'MLB Stats API (statsapi.mlb.com)', builder: 'build-seasons.mjs',  needle: 'statsapi.mlb.com' },
+  league:   { label: 'MLB Stats API (statsapi.mlb.com)', builder: 'build-seasons.mjs',  needle: 'statsapi.mlb.com' },
+  statcast: { label: 'Baseball Savant',                  builder: 'build-statcast.mjs', needle: 'baseballsavant.mlb.com' },
 };
-const seenSources = new Set(Object.values(s).map((v) => v.source));
-for (const source of seenSources) {
-  const spec = SOURCE_URLS[source];
-  if (!spec) {
-    check(`source "${source}" is known to the provenance guard`, false);
-    continue;
+const usedDatasets = new Set(Object.values(s).map((v) => v.dataset).filter(Boolean));
+for (const dataset of usedDatasets) {
+  const spec = DATASET_SOURCE[dataset];
+  if (!spec) { check(`dataset "${dataset}" is known to the provenance guard`, false); continue; }
+  try {
+    const builderSrc = fs.readFileSync(path.join(ROOT, 'tools', spec.builder), 'utf8');
+    check(`dataset "${dataset}" traces to ${spec.needle} in ${spec.builder}`,
+      builderSrc.includes(spec.needle));
+  } catch (err) {
+    check(`dataset "${dataset}"'s builder ${spec.builder} is readable`, false, err.message);
   }
-  const builderSrc = fs.readFileSync(path.join(ROOT, 'tools', spec.builder), 'utf8');
-  check(`source "${source}" traces to ${spec.needle} in ${spec.builder}`,
-    builderSrc.includes(spec.needle));
+}
+for (const [key, v] of Object.entries(s)) {
+  const spec = DATASET_SOURCE[v.dataset];
+  if (!spec) { check(`${key} has a known dataset ("${v.dataset}")`, false); continue; }
+  check(`${key}.source matches its own dataset (${v.dataset})`,
+    v.source === spec.label, `got "${v.source}", expected "${spec.label}"`);
 }
 
 process.exit(failures ? 1 : 0);
