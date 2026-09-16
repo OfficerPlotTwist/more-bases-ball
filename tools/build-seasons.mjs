@@ -41,6 +41,19 @@ export const toOuts = (ip) => {
   return Number(w) * 3 + Number(f || 0);
 };
 
+/* A traded player's splits[0] is the COMBINED season total (carries
+ * numTeams), not that club's line — per-club lines are splits[1..N]. The
+ * hydrate must ask for `team` on the stat split or `split.team` is absent
+ * everywhere and a club-id match finds nothing. Never fall back to a
+ * numTeams-bearing split: a combined line attributed to one club is the
+ * exact bug this exists to prevent. */
+function ownSplit(stats, clubId) {
+  const splits = (stats && stats.splits) || [];
+  const own = splits.find((s) => s.team && s.team.id === clubId);
+  const solo = splits.length === 1 && !splits[0].numTeams ? splits[0] : null;
+  return own || solo || null;
+}
+
 const leagueAbbrCache = new Map();
 async function leagueAbbr(id, name) {
   if (id == null) return name || null;
@@ -78,6 +91,7 @@ const seasonYears = [];
 const leagueYears = [];
 let totalBat = 0;
 let totalPit = 0;
+const failures = [];
 
 for (let year = FIRST; year <= LAST; year++) {
   const list = await getJson(`${API}/teams?sportId=1&season=${year}`);
@@ -92,49 +106,61 @@ for (let year = FIRST; year <= LAST; year++) {
   const perClub = await pool(clubs, 8, async (club) => {
     const lg = lgByClub.get(club.id);
     const hitUrl = `${API}/teams/${club.id}/roster?season=${year}&rosterType=fullSeason`
-      + `&hydrate=person(stats(type=season,group=hitting,season=${year}))`;
+      + `&hydrate=person(stats(type=season,group=hitting,season=${year},team))`;
     const pitUrl = `${API}/teams/${club.id}/roster?season=${year}&rosterType=fullSeason`
-      + `&hydrate=person(stats(type=season,group=pitching,season=${year}))`;
-    const [hj, pj] = await Promise.all([getJson(hitUrl), getJson(pitUrl)]);
-    const rows = [];
+      + `&hydrate=person(stats(type=season,group=pitching,season=${year},team))`;
+    try {
+      const [hj, pj] = await Promise.all([getJson(hitUrl), getJson(pitUrl)]);
+      const rows = [];
 
-    for (const spot of hj.roster || []) {
-      const stats = spot.person && spot.person.stats && spot.person.stats[0];
-      const split = stats && stats.splits && stats.splits[0];
-      const st = split && split.stat;
-      if (!st) continue;
-      rows.push({
-        year, mlbam: spot.person.id, bbref: null, name: spot.person.fullName,
-        pos: (spot.position && spot.position.abbreviation) || null,
-        team: club.abbreviation, lg, role: 'bat',
-        pa: st.plateAppearances ?? null, ab: st.atBats ?? null, h: st.hits ?? null,
-        d2: st.doubles ?? null, d3: st.triples ?? null, hr: st.homeRuns ?? null,
-        bb: st.baseOnBalls ?? null, so: st.strikeOuts ?? null,
-        sb: st.stolenBases ?? null, cs: st.caughtStealing ?? null,
-        hbp: st.hitByPitch ?? null,
-        ipouts: null, er: null, bf: null, p_h: null, p_bb: null, p_so: null, p_hr: null,
-      });
+      for (const spot of hj.roster || []) {
+        const stats = spot.person && spot.person.stats && spot.person.stats[0];
+        const split = ownSplit(stats, club.id);
+        const st = split && split.stat;
+        if (!st) continue;
+        rows.push({
+          year, mlbam: spot.person.id, bbref: null, name: spot.person.fullName,
+          pos: (spot.position && spot.position.abbreviation) || null,
+          team: club.abbreviation, lg, role: 'bat',
+          pa: st.plateAppearances ?? null, ab: st.atBats ?? null, h: st.hits ?? null,
+          d2: st.doubles ?? null, d3: st.triples ?? null, hr: st.homeRuns ?? null,
+          bb: st.baseOnBalls ?? null, so: st.strikeOuts ?? null,
+          sb: st.stolenBases ?? null, cs: st.caughtStealing ?? null,
+          hbp: st.hitByPitch ?? null,
+          ipouts: null, er: null, bf: null, p_h: null, p_bb: null, p_so: null, p_hr: null,
+        });
+      }
+      for (const spot of pj.roster || []) {
+        const stats = spot.person && spot.person.stats && spot.person.stats[0];
+        const split = ownSplit(stats, club.id);
+        const st = split && split.stat;
+        if (!st) continue;
+        rows.push({
+          year, mlbam: spot.person.id, bbref: null, name: spot.person.fullName,
+          pos: (spot.position && spot.position.abbreviation) || null,
+          team: club.abbreviation, lg, role: 'pit',
+          pa: null, ab: null, h: null, d2: null, d3: null, hr: null, bb: null, so: null,
+          sb: null, cs: null, hbp: null,
+          ipouts: toOuts(st.inningsPitched), er: st.earnedRuns ?? null,
+          bf: st.battersFaced ?? null, p_h: st.hits ?? null, p_bb: st.baseOnBalls ?? null,
+          p_so: st.strikeOuts ?? null, p_hr: st.homeRuns ?? null,
+        });
+      }
+      return { ok: true, rows };
+    } catch (e) {
+      const reason = (e && e.message) || String(e);
+      failures.push({ year, club: club.abbreviation, error: reason });
+      console.log(`WARN ${year} ${club.abbreviation}: ${reason}`);
+      return { ok: false, rows: [] };
     }
-    for (const spot of pj.roster || []) {
-      const stats = spot.person && spot.person.stats && spot.person.stats[0];
-      const split = stats && stats.splits && stats.splits[0];
-      const st = split && split.stat;
-      if (!st) continue;
-      rows.push({
-        year, mlbam: spot.person.id, bbref: null, name: spot.person.fullName,
-        pos: (spot.position && spot.position.abbreviation) || null,
-        team: club.abbreviation, lg, role: 'pit',
-        pa: null, ab: null, h: null, d2: null, d3: null, hr: null, bb: null, so: null,
-        sb: null, cs: null, hbp: null,
-        ipouts: toOuts(st.inningsPitched), er: st.earnedRuns ?? null,
-        bf: st.battersFaced ?? null, p_h: st.hits ?? null, p_bb: st.baseOnBalls ?? null,
-        p_so: st.strikeOuts ?? null, p_hr: st.homeRuns ?? null,
-      });
-    }
-    return rows;
   });
 
-  const rows = perClub.flat();
+  const fetchedClubs = perClub.filter((r) => r.ok).length;
+  if (fetchedClubs !== clubs.length) {
+    console.log(`WARN ${year}: expected ${clubs.length} clubs, fetched ${fetchedClubs}`);
+  }
+
+  const rows = perClub.flatMap((r) => r.rows);
   if (rows.length) {
     const tmpFile = path.join(TMP, `${year}.json`);
     fs.writeFileSync(tmpFile, JSON.stringify(rows));
@@ -148,10 +174,19 @@ for (let year = FIRST; year <= LAST; year++) {
     totalPit += rows.filter((r) => r.role === 'pit').length;
   }
 
-  const [hitJ, pitJ] = await Promise.all([
-    getJson(`${API}/teams/stats?stats=season&group=hitting&season=${year}&sportId=1`),
-    getJson(`${API}/teams/stats?stats=season&group=pitching&season=${year}&sportId=1`),
-  ]);
+  let hitJ;
+  let pitJ;
+  try {
+    [hitJ, pitJ] = await Promise.all([
+      getJson(`${API}/teams/stats?stats=season&group=hitting&season=${year}&sportId=1`),
+      getJson(`${API}/teams/stats?stats=season&group=pitching&season=${year}&sportId=1`),
+    ]);
+  } catch (e) {
+    const reason = (e && e.message) || String(e);
+    failures.push({ year, club: 'league-stats', error: reason });
+    console.log(`WARN ${year} league-stats: ${reason}`);
+    continue;
+  }
   const hitSplits = (hitJ.stats && hitJ.stats[0] && hitJ.stats[0].splits) || [];
   const pitSplits = (pitJ.stats && pitJ.stats[0] && pitJ.stats[0].splits) || [];
   const raById = new Map(pitSplits.map((s) => [s.team.id, s.stat.runs ?? null]));
@@ -194,6 +229,14 @@ console.log(`  bat  ${totalBat} player-seasons`);
 console.log(`  pit  ${totalPit} player-seasons`);
 
 await db.close();
+
+/* A partial spine must never exit 0 — silent partial data is exactly what
+ * would let coverage.json (Task 6) measure a truncated dataset as complete. */
+if (failures.length) {
+  console.log(`\n${failures.length} fetch failure(s):`);
+  for (const f of failures) console.log(`  ${f.year} ${f.club}: ${f.error}`);
+  process.exitCode = 1;
+}
 }
 
 /* Only run the build when executed directly — importing this module (for

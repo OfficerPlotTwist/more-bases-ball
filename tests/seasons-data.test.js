@@ -26,6 +26,8 @@ function check(label, ok, detail) {
   const { openDb } = await import('../tools/lib/duck.mjs');
   const db = await openDb();
   const glob = path.join(DIR, '*.parquet').replace(/\\/g, '/');
+  const LGDIR = path.join(ROOT, 'data', 'league');
+  const lg = path.join(LGDIR, '*.parquet').replace(/\\/g, '/');
 
   const span = (await db.all(
     `SELECT min(year) AS lo, max(year) AS hi FROM read_parquet('${glob}')`))[0];
@@ -60,8 +62,31 @@ function check(label, ok, detail) {
     `SELECT count(*) AS n FROM read_parquet('${glob}') WHERE mlbam IS NULL`))[0];
   check('every row carries a player id', Number(noId.n) === 0, `null=${noId.n}`);
 
+  // A missing middle year (e.g. 1953) would still pass every check above,
+  // since modern rosters dominate the aggregate totals — check coverage
+  // year by year instead, for both datasets.
+  const expectedYears = [];
+  for (let y = 1876; y <= 2025; y++) expectedYears.push(y);
+
+  const seasonCounts = await db.all(
+    `SELECT year, count(*) AS n FROM read_parquet('${glob}') GROUP BY year`);
+  const seasonRows = new Map(seasonCounts.map((r) => [Number(r.year), Number(r.n)]));
+  const missingSeasons = expectedYears.filter((y) =>
+    !fs.existsSync(path.join(DIR, `${y}.parquet`)) || !(seasonRows.get(y) > 0));
+  check('every year 1876-2025 has a seasons file with rows', missingSeasons.length === 0,
+    `missing=${missingSeasons.length}` +
+    (missingSeasons.length ? ` first: ${missingSeasons.slice(0, 5).join(',')}` : ''));
+
+  const leagueCounts = await db.all(
+    `SELECT year, count(*) AS n FROM read_parquet('${lg}') GROUP BY year`);
+  const leagueRows = new Map(leagueCounts.map((r) => [Number(r.year), Number(r.n)]));
+  const missingLeague = expectedYears.filter((y) =>
+    !fs.existsSync(path.join(LGDIR, `${y}.parquet`)) || !(leagueRows.get(y) > 0));
+  check('every year 1876-2025 has a league file with rows', missingLeague.length === 0,
+    `missing=${missingLeague.length}` +
+    (missingLeague.length ? ` first: ${missingLeague.slice(0, 5).join(',')}` : ''));
+
   // Team totals: the only Tier A source of team-games, so runs/game is exact.
-  const lg = path.join(ROOT, 'data', 'league', '*.parquet').replace(/\\/g, '/');
   const rpg = (await db.all(
     `SELECT sum(r) * 1.0 / sum(g) AS v FROM read_parquet('${lg}') WHERE year = 2019`))[0];
   check('2019 runs per team-game is ~4.8',
