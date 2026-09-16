@@ -22,8 +22,13 @@
       <label for="mode-select">Field mode</label>
       <select id="mode-select">
         <option value="classic" selected>Classic N-gon</option>
+        <option value="multi">Classic N-gon · all plates live</option>
         <option value="custom">Custom layout (designer)</option>
       </select>
+    </div>
+    <div class="knob">
+      <label for="season-select">Season</label>
+      <select id="season-select"></select>
     </div>
     <div class="knob">
       <label for="away-select">Visitors</label>
@@ -111,8 +116,8 @@
             </label>
             <label class="inline" for="runmode-select">Runners break on
               <select id="runmode-select">
-                <option value="origin" selected>their origin plate's hit</option>
-                <option value="any">any plate's hit</option>
+                <option value="any" selected>any plate's hit</option>
+                <option value="origin">their origin plate's hit</option>
               </select>
             </label>
           </div>

@@ -11,6 +11,8 @@
 
   let field, root;         // svg + our layer root
   let layout;
+  // the user's design, parked while the stage shows a generated layout
+  let parked = null;
   let mode = 'classic';
   let tool = 'move';
   let sym = true;            // 3-fold radial symmetry for edits
@@ -201,6 +203,7 @@
   }
 
   function onPointerDown(evt) {
+    if (parked) return;   // showing a generated field: look, don't edit
     if (mode !== 'custom') return;
     const id = nodeAt(evt);
     const p = svgPoint(evt);
@@ -335,11 +338,16 @@
           r: 8, fill: tr.out ? '#d64541' : '#ffc14d',
           stroke: '#3d2c07', 'stroke-width': 2,
         }, g);
-        el('text', {
-          x: 0, y: 24, 'text-anchor': 'middle',
-          fill: tr.out ? '#d64541' : '#ffc14d',
-          'font-family': "'IBM Plex Mono', monospace", 'font-size': 10,
-        }, g).textContent = tr.name.split(' ').pop();
+        // fielder tracks carry a slot, not a name — only label the men who
+        // have one (runners and batters), or this throws on every ball
+        // the defense played
+        if (tr.name) {
+          el('text', {
+            x: 0, y: 24, 'text-anchor': 'middle',
+            fill: tr.out ? '#d64541' : '#ffc14d',
+            'font-family': "'IBM Plex Mono', monospace", 'font-size': 10,
+          }, g).textContent = tr.name.split(' ').pop();
+        }
       }
       return g;
     });
@@ -384,9 +392,12 @@
 
   function setMode(m) {
     mode = m;
+    // 'multi' borrows the stage to draw its own layout, but not the tools
+    const onStage = m === 'custom' || m === 'multi';
     $('designer').hidden = m !== 'custom';
-    $('classic-root').style.display = m === 'custom' ? 'none' : '';
-    root.style.display = m === 'custom' ? '' : 'none';
+    $('classic-root').style.display = onStage ? 'none' : '';
+    root.style.display = onStage ? '' : 'none';
+    if (m !== 'multi' && parked) { layout = parked; parked = null; }
     if (m === 'custom') {
       render([]);
       $('field-title').textContent = 'The field — custom layout (designer)';
@@ -467,7 +478,7 @@
       root.style.display = 'none';
       layout = load() || L.makeStarter(250);
       if (!layout.pitchMode) layout.pitchMode = 'tri';   // older saved layouts
-      if (!layout.runMode) layout.runMode = 'origin';
+      if (!layout.runMode) layout.runMode = 'any';
       if (!layout.moundDist) layout.moundDist = 60.5;
       $('spacing-input').value = layout.spacing;
       $('rule-select').value = layout.scoreRule;
@@ -477,6 +488,22 @@
       wire();
     },
     isCustom: () => mode === 'custom',
+    mode: () => mode,
+    /* Render a layout the designer did not build (the all-plates N-gon), so
+     * the 2D stage animates those games too instead of sitting dead. The
+     * design is parked, not overwritten, and editing is off while it shows.
+     */
+    showLayout(ly) {
+      if (!parked) parked = layout;
+      layout = ly;
+      root.style.display = '';
+      render([]);
+    },
+    restoreLayout() {
+      if (parked) { layout = parked; parked = null; }
+      root.style.display = mode === 'custom' ? '' : 'none';
+      if (mode === 'custom') render([]);
+    },
     getLayout: () => layout,
     renderRunners: (occ) => render(occ),
     clearRunners: () => render([]),

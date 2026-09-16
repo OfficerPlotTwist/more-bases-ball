@@ -107,7 +107,9 @@
     }
 
     // Mean base-ring radius sets how deep the pool plays.
-    const real = layout.nodes.filter(finite);
+    // An all-plate ring (every vertex is a home) has no separate bases; the
+    // plates themselves are the ring that sets how deep the pool plays.
+    const real = (layout.nodes.length ? layout.nodes : layout.homes).filter(finite);
     let R = 0;
     for (const n of real) R += ftBetween(c, n);
     R = real.length ? R / real.length : 90;

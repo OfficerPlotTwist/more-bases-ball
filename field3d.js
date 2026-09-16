@@ -627,14 +627,17 @@ function animatePlay(entry, prevOcc, speedMult, done) {
       ballMesh.visible = true;
       return { tr, mesh: ballMesh, trail: makeTrail(C.trail) };
     }
-    const isRunner = tr.kind === 'runner';
+    // a batter in the box is offense: same pool and label as a runner
+    const isBatter = tr.kind === 'batter';
+    const isRunner = tr.kind === 'runner' || isBatter;
     const colour = isRunner
       ? (tr.out ? C.runnerOut : tr.scored ? C.runnerScored : C.runner)
       : (tr.chasing ? C.fielderHot : C.fielder);
     const p = borrow(isRunner ? runnerPool : fielderPool, colour);
     if (isRunner) {
       setPlayerLabel(p, tr.name.split(' ').pop(),
-        tr.out ? '#d64541' : tr.scored ? '#6fd08c' : '#ffc14d');
+        tr.out ? '#d64541' : tr.scored ? '#6fd08c'
+          : isBatter && !tr.atBat ? '#8fa3b8' : '#ffc14d');
     }
     return { tr, mesh: p, trail: makeTrail(colour) };
   });

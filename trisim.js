@@ -23,6 +23,60 @@
 
   const MAX_EXTRA = 30;
   const WINDOW_MS = 1000;
+  const CYCLE_CAP_S = 8;   // a window holds several plays, so it gets longer
+
+  /* The plates are live at the same time, so the window they share has to
+   * animate as one play -- otherwise two balls struck 0.3s apart are shown
+   * one after the other and the format is invisible. Each plate appearance
+   * is still resolved on its own (outcomes, box score and every test are
+   * untouched); this only lays the finished timelines onto a single clock,
+   * each offset by the moment its pitcher actually let go.
+   *
+   * Worth knowing: because the plays were resolved independently, a fielder
+   * can appear in two of them at once. The engine's decisions are honest
+   * one play at a time; the composite is honest about *when*, not about
+   * how thinly the defense is stretched.
+   */
+  function buildCycleAnim(entries) {
+    const tracks = [];
+    const runnerAt = new Map();
+    let dur = 0;
+    for (const e of entries) {
+      if (!e.anim) continue;
+      const off = (e.tOffset || 0) / 1000;
+      // back to real seconds before sharing a clock; the window is squeezed
+      // once at the end so everyone on screen keeps the same pace
+      const un = 1 / (e.anim.squeeze || 1);
+      for (const tr of e.anim.tracks) {
+        // each play draws every box; on one clock that is N copies of each
+        // man, so keep only the batter the play belongs to
+        if (tr.kind === 'batter' && !tr.atBat) continue;
+        const shifted = Object.assign({}, tr, {
+          ownPlate: e.plate,   // which appearance this track came from
+          pts: tr.pts.map((p) => Object.assign({}, p, { t: p.t * un + off })),
+        });
+        if (tr.kind === 'runner') {
+          // a runner who breaks on two hits in the same window would other-
+          // wise be drawn twice and teleport between the copies
+          const prev = runnerAt.get(tr.name);
+          if (prev && prev.pts[0].t <= shifted.pts[0].t) continue;
+          if (prev) tracks.splice(tracks.indexOf(prev), 1);
+          runnerAt.set(tr.name, shifted);
+        }
+        tracks.push(shifted);
+      }
+      dur = Math.max(dur, (e.anim.dur - 0.2) * un + off);
+    }
+    // one squeeze for the whole window: several plays share it, so the cap
+    // is looser than a single play's, and every runner keeps one pace
+    let squeeze = 1;
+    if (dur > CYCLE_CAP_S) {
+      squeeze = CYCLE_CAP_S / dur;
+      for (const tr of tracks) for (const p of tr.pts) p.t *= squeeze;
+      dur = CYCLE_CAP_S;
+    }
+    return { dur: dur + 0.2, squeeze, tracks };
+  }
 
   function playHalfTri(side, layout, paths, slots, cfg, rnd, log, ctx) {
     let outs = 0, runs = 0, cycle = 0;
@@ -30,14 +84,23 @@
     const geo = { layout, rnd };
 
     while (outs < cfg.outs && cycle < 3000) {
+      const thisCycle = [];
       // the shared one-second window: each mound fires at a random moment
       const deliveries = layout.homes
         .map((h) => ({ plate: h.id, t: Math.floor(rnd() * WINDOW_MS) }))
         .sort((a, b) => a.t - b.t);
+      // Who is in each box is known before the first pitch of the window, so
+      // every play can draw the batters waiting at the other plates. Peeked,
+      // not consumed: `side.spot` still only advances for men who actually
+      // bat, so a half-inning that ends mid-cycle rotates the lineup exactly
+      // as it did before.
+      deliveries.forEach((dv, i) => {
+        dv.batter = side.lineup[(side.spot + i) % side.lineup.length];
+      });
 
       for (const dv of deliveries) {
         if (outs >= cfg.outs) break;
-        const batter = side.lineup[side.spot % side.lineup.length];
+        const batter = dv.batter;
         side.spot++;
         const plate = dv.plate;
         const target = L.targetOf(layout, plate);
@@ -49,6 +112,9 @@
           inning: ctx.inning, half: ctx.half, team: side.abbr,
           batter: batter.name, pos: batter.pos, plate,
           cycle, tOffset: dv.t, type, sub: null,
+          otherBatters: deliveries
+            .filter((d) => d.plate !== plate)
+            .map((d) => ({ plate: d.plate, name: d.batter.name })),
           runs: 0, scorers: [], runnersOut: [], moves: [], contact: null, throwTo: null,
         };
 
@@ -61,7 +127,7 @@
             occ.delete(node);
             entry.runs++; entry.scorers.push(r.name);
             entry.moves.push({
-              name: r.name,
+              name: r.name, spd: r.spd, hp1: r.hp1,
               path: paths[r.target].dist[node] != null
                 ? chainToTarget(paths, r.target, node) : [node, r.target],
               scored: true,
@@ -71,7 +137,7 @@
           const bs = L.batterStart(layout, paths, plate, target);
           if (bs) {
             entry.moves.push({
-              name: batter.name,
+              name: batter.name, spd: batter.spd, hp1: batter.hp1,
               path: [plate].concat(chainToTarget(paths, target, bs.first)), scored: true,
             });
           }
@@ -97,10 +163,16 @@
         entry.occupancyAfter = [...occ.entries()].map(([node, r]) => ({ node, name: r.name }));
         entry.score = ctx.score();
         buildAnim(layout, entry, slots);
+        thisCycle.push(entry);
         log.push(entry);
 
-        if (ctx.walkoff && ctx.walkoff()) { entry.walkoff = entry.runs > 0; return runs; }
+        if (ctx.walkoff && ctx.walkoff()) {
+          entry.walkoff = entry.runs > 0;
+          thisCycle[0].cycleAnim = buildCycleAnim(thisCycle);
+          return runs;
+        }
       }
+      if (thisCycle.length) thisCycle[0].cycleAnim = buildCycleAnim(thisCycle);
       cycle++;
     }
     return runs;
@@ -174,7 +246,7 @@
     return agg;
   }
 
-  const API = { simGameTri, simManyTri, WINDOW_MS };
+  const API = { simGameTri, simManyTri, buildCycleAnim, WINDOW_MS };
   if (IS_NODE) module.exports = API;
   else global.MBB_TRI = API;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -270,6 +270,8 @@ svg#field { display: block; width: 100%; height: auto; }
 
 /* ---------- field designer ---------- */
 
+.designer[hidden] { display: none; }
+
 .designer {
   padding: 10px 14px;
   border-bottom: 1px solid var(--steel-edge);

@@ -2,7 +2,8 @@
 (function () {
   'use strict';
 
-  const TEAMS = window.MBB_DATA.TEAMS;
+  const DATA = window.MBB_DATA;
+  let TEAMS = DATA.TEAMS;
   const SIM = window.MBB_SIM;
   const $ = (id) => document.getElementById(id);
   const NS = 'http://www.w3.org/2000/svg';
@@ -224,8 +225,13 @@
   /* ---------------- controls ---------------- */
 
   function fillTeamSelect(sel, defaultIdx) {
+    // keep the club that was picked when the season changes under us;
+    // defaultIdx is only for the first fill
+    const keep = sel.value;
     sel.innerHTML = TEAMS.map((t, i) => `<option value="${i}">${t.name}</option>`).join('');
-    sel.value = defaultIdx;
+    if (defaultIdx != null) sel.value = String(defaultIdx);
+    else if (keep !== '' && TEAMS[+keep]) sel.value = keep;
+    if (!sel.value) sel.value = '0';
   }
 
   function readCfg() {
@@ -237,7 +243,12 @@
   }
 
   function teamOf(which) {
-    return TEAMS[+$(`${which}-select`).value];
+    return TEAMS[+$(`${which}-select`).value] || TEAMS[0];
+  }
+
+  function pickTeam(abbr, fallback) {
+    const i = TEAMS.findIndex((t) => t.abbr === abbr);
+    return i < 0 ? fallback : i;
   }
 
   function emptySide(t, cfg) {
@@ -279,8 +290,19 @@
 
   // The layout whose geometry is currently on screen: the one being
   // designed, or the N-gon standing in for the classic diamond.
+  // 'multi': the same N-gon, but every vertex is a live home plate, so all
+  // B+1 batters swing inside one shared 1s window (trisim.js).
+  function isMulti() {
+    return !!(window.MBB_EDITOR.mode && window.MBB_EDITOR.mode() === 'multi');
+  }
+
+  function multiLayout(cfg) {
+    return window.MBB_LAYOUT.makeNgonMulti(cfg.bases, 90);
+  }
+
   function liveLayout() {
     if (window.MBB_EDITOR.isCustom()) return window.MBB_EDITOR.getLayout();
+    if (isMulti()) return multiLayout(readCfg());
     return window.MBB_NGON.layoutFor(readCfg().bases);
   }
 
@@ -353,6 +375,11 @@
         : window.MBB_GSIM.simGameGraph(away, home, layout, cfg);
       window.MBB_EDITOR.clearRunners();
       if (view3d()) view3d().setLayout(layout);
+    } else if (isMulti()) {
+      const layout = multiLayout(cfg);
+      g = window.MBB_TRI.simGameTri(away, home, layout, cfg);
+      window.MBB_EDITOR.showLayout(layout);
+      if (view3d()) view3d().setLayout(layout);
     } else {
       // classic outcomes still come from sim.js; ngon.js only works out
       // where on a real diamond each of those plays happened
@@ -389,7 +416,7 @@
       if (showRunners) {
         const V = view3d();
         if (V) V.renderRunners(e.occupancyAfter);
-        else if (window.MBB_EDITOR.isCustom()) window.MBB_EDITOR.renderRunners(e.occupancyAfter);
+        else if (window.MBB_EDITOR.isCustom() || isMulti()) window.MBB_EDITOR.renderRunners(e.occupancyAfter);
         else setRunners(e.basesAfter);
       }
 
@@ -423,7 +450,7 @@
 
     // Anything with real geometry animates: custom layouts on either
     // field, and classic games whenever the 3D view is up.
-    const stage = view3d() || (custom ? window.MBB_EDITOR : null);
+    const stage = view3d() || (custom || isMulti() ? window.MBB_EDITOR : null);
     if (stage) {
       // animated playback: ball flight + runners and fielders on their tracks
       const mult = speed === 650 ? 1 : speed === 300 ? 2 : speed === 90 ? 5 : 0;
@@ -438,11 +465,30 @@
         const e = g.log[i];
         const key = e.inning + '|' + e.half;
         if (key !== prevKey) { prevOcc = []; prevKey = key; }
-        applyEntry(e, i, false);
+
+        /* One delivery window is one play. The plates pitch together, so
+         * animating their appearances one after another hid the whole
+         * point -- two balls in the air at once is the format.
+         */
+        const group = [e];
+        if (e.cycleAnim) {
+          while (i + group.length < g.log.length) {
+            const nx = g.log[i + group.length];
+            if (nx.inning !== e.inning || nx.half !== e.half
+              || nx.cycle !== e.cycle) break;
+            group.push(nx);
+          }
+        }
+        for (let k = 0; k < group.length; k++) applyEntry(group[k], i + k, false);
+
         const before = prevOcc;
-        prevOcc = e.occupancyAfter;
-        i++;
-        stage.animatePlay(e, before, mult, () => {
+        const last = group[group.length - 1];
+        prevOcc = last.occupancyAfter;
+        i += group.length;
+        const shown = e.cycleAnim
+          ? Object.assign({}, e, { anim: e.cycleAnim, occupancyAfter: last.occupancyAfter })
+          : e;
+        stage.animatePlay(shown, before, mult, () => {
           timer = setTimeout(step, 130);
         });
       };
@@ -485,6 +531,11 @@
         `${layout.scoreRule === 'own' ? 'own plate' : 'clockwise next plate'}` +
         (tri ? `, tri-pitch, runners break on ${layout.runMode === 'any' ? 'any hit' : 'origin hit'}` : '') +
         ')';
+    } else if (isMulti()) {
+      const layout = multiLayout(cfg);
+      a = window.MBB_TRI.simManyTri(away, home, layout, cfg, N);
+      ruleLabel = `${cfg.bases} base${cfg.bases > 1 ? 's' : ''} (${SHAPES[cfg.bases]}), ` +
+        `all ${layout.homes.length} plates live`;
     } else {
       a = SIM.simMany(away, home, cfg, N);
       ruleLabel = `${cfg.bases} base${cfg.bases > 1 ? 's' : ''} (${SHAPES[cfg.bases]})`;
@@ -525,8 +576,19 @@
     }
     const cfg = readCfg();
     const away = teamOf('away'), home = teamOf('home');
-    const PER = 300;
-    const rows = SIM.scanBases(away, home, cfg, 1, 7, PER);
+    const PER = isMulti() ? 60 : 300;
+    const rows = isMulti()
+      ? [1, 2, 3, 4, 5, 6, 7].map((b) => {
+        const a = window.MBB_TRI.simManyTri(
+          away, home, multiLayout({ bases: b }), cfg, PER);
+        return {
+          bases: b,
+          avgTotalRuns: (a.awayRuns + a.homeRuns) / PER,
+          avgHomers: a.homers / PER,
+          extraPct: (a.extraInningGames / PER) * 100,
+        };
+      })
+      : SIM.scanBases(away, home, cfg, 1, 7, PER);
     $('results').innerHTML = `
       <section class="panel">
         <h2>Base-count scan · ${away.abbr} @ ${home.abbr} · ${PER} games per configuration</h2>
@@ -560,13 +622,41 @@
     $('innings-val').textContent = cfg.innings;
     $('outs-val').textContent = cfg.outs;
     $('shape-name').textContent = SHAPES[cfg.bases];
-    if (!window.MBB_EDITOR.isCustom()) renderField(cfg.bases);
+    if (isMulti()) window.MBB_EDITOR.showLayout(multiLayout(cfg));
+    else if (!window.MBB_EDITOR.isCustom()) renderField(cfg.bases);
     refresh3d();   // a different base count is a different polygon
     resetBoard();
   }
 
-  fillTeamSelect($('away-select'), 1); // Yankees visit
-  fillTeamSelect($('home-select'), 0); // Dodgers host
+  /* Season picker. Every club for the last five years is in data.js, and a
+   * batter's line AND his measured running data both change with the year,
+   * so switching seasons rebuilds the team lists rather than just relabelling
+   * them. The two clubs on the card are kept if the pick is still valid.
+   */
+  function fillSeasonSelect() {
+    $('season-select').innerHTML = DATA.YEARS
+      .map((y) => `<option value="${y}">${y}</option>`).join('');
+    $('season-select').value = String(DATA.DEFAULT_YEAR);
+  }
+
+  function setSeason(year) {
+    stopPlayback();
+    // hold the two clubs across the change, by club not by list position:
+    // the list is alphabetical and a club can be renamed between seasons
+    // (Oakland Athletics -> Athletics), which moves everything after it
+    const wasAway = teamOf('away').abbr;
+    const wasHome = teamOf('home').abbr;
+    TEAMS = DATA.setYear(+year);
+    fillTeamSelect($('away-select'), pickTeam(wasAway, 0));
+    fillTeamSelect($('home-select'), pickTeam(wasHome, 1));
+    resetBoard();
+    $('results').innerHTML = '';
+  }
+
+  fillSeasonSelect();
+  fillTeamSelect($('away-select'), pickTeam('NYY', 1));
+  fillTeamSelect($('home-select'), pickTeam('LAD', 0));
+  $('season-select').addEventListener('change', (e) => setSeason(e.target.value));
   buildField();
   renderField(3);
   window.MBB_EDITOR.init();
@@ -576,11 +666,12 @@
     stopPlayback();
     resetBoard();
     const custom = e.detail.mode === 'custom';
+    const multi = e.detail.mode === 'multi';
     $('bases-range').disabled = custom;
-    if (!custom) {
-      renderField(readCfg().bases);
-      $('shape-name').textContent = SHAPES[readCfg().bases];
-    }
+    if (!custom) $('shape-name').textContent = SHAPES[readCfg().bases];
+    // multi borrows the designer's stage to draw its own all-plates field
+    if (multi) window.MBB_EDITOR.showLayout(multiLayout(readCfg()));
+    else if (!custom) { window.MBB_EDITOR.restoreLayout(); renderField(readCfg().bases); }
     refresh3d();
   });
 

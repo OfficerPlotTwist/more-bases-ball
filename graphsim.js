@@ -18,6 +18,46 @@
   // movement physics, ft/s: sprint speed (Statcast average ~27), throw
   // velocity (~92 mph), pitch flight, batted-ball travel
   const RUN_FTS = 27, THROW_FTS = 135, PITCH_FTS = 132, HIT_FTS = 110;
+
+  /* ---------------- RUN MODEL ----------------
+   * Nobody runs at a flat speed from a standing start, and the two numbers
+   * that say so are measured, not invented. Every batter in data.js carries
+   *   spd  his Statcast sprint speed (ft/s, peak one-second window)
+   *   hp1  his average home-to-first time (s, over 90 ft)
+   * A flat 27 ft/s covers 90 ft in 3.33s; the league actually takes ~4.44s
+   * out of the box, because the swing, the turn and the acceleration from
+   * rest are all in there. The gap between the two IS the start-up cost:
+   *
+   *   startCost = hp1 - 90 / spd          (~1.15s at the league median)
+   *
+   * so a leg is  distance / spd + startCost,  and every player's own
+   * home-to-first time is reproduced exactly by construction.
+   *
+   * Leaving a base is not the same as leaving the box: no swing to finish,
+   * and a runner takes a primary lead and is already leaning. Statcast does
+   * not publish base-to-base times, so unlike spd and hp1 these two are
+   * MODEL, not measurement, and are the honest place to tune:
+   */
+  const LEAD_FT = 12;        // primary + secondary lead, already covered
+  const BASE_START = 0.45;   // fraction of the start-up cost still paid
+
+  function topSpeed(r) {
+    return (r && r.spd > 0) ? r.spd : RUN_FTS;
+  }
+
+  function startCost(r) {
+    const v = topSpeed(r);
+    if (!r || !(r.hp1 > 0)) return 0;
+    return Math.max(0, r.hp1 - 90 / v);
+  }
+
+  // Seconds for one runner to cover `ft`. `fromPlate` is the leg out of the
+  // batter's box; every other leg starts off a bag with a lead.
+  function runSec(r, ft, fromPlate) {
+    const v = topSpeed(r);
+    if (fromPlate) return ft / v + startCost(r);
+    return Math.max(0, ft - LEAD_FT) / v + startCost(r) * BASE_START;
+  }
   // securing the ball once you have run it down, and the transfer out of
   // the glove before the throw
   const GLOVE_S = 0.15, TRANSFER_S = 0.3;
@@ -104,7 +144,7 @@
       if (m.d <= steps) {
         occ.delete(m.node);
         entry.runs++; entry.scorers.push(m.r.name);
-        entry.moves.push({ name: m.r.name, path: chainToTarget(paths, m.r.target, m.node), scored: true });
+        entry.moves.push({ name: m.r.name, spd: m.r.spd, hp1: m.r.hp1, path: chainToTarget(paths, m.r.target, m.node), scored: true });
         continue;
       }
       const chain = [m.node];
@@ -126,7 +166,7 @@
           if (geo.rnd() < stretchChance(eft)) {
             if (dLand <= 1) {
               entry.runs++; entry.scorers.push(m.r.name);
-              entry.moves.push({ name: m.r.name, path: chain.concat([m.r.target]), scored: true });
+              entry.moves.push({ name: m.r.name, spd: m.r.spd, hp1: m.r.hp1, path: chain.concat([m.r.target]), scored: true });
               continue;
             }
             if (!occ.has(nx)) { chain.push(nx); land = nx; idx++; }
@@ -134,7 +174,7 @@
         }
       }
       occ.set(land, m.r);
-      entry.moves.push({ name: m.r.name, path: chain.slice(0, idx + 1) });
+      entry.moves.push({ name: m.r.name, spd: m.r.spd, hp1: m.r.hp1, path: chain.slice(0, idx + 1) });
     }
   }
 
@@ -144,7 +184,7 @@
     if (steps >= bs.startDist) {
       entry.runs++; entry.scorers.push(batter.name);
       entry.moves.push({
-        name: batter.name,
+        name: batter.name, spd: batter.spd, hp1: batter.hp1,
         path: [plate].concat(chainToTarget(paths, target, bs.first)), scored: true,
       });
       return 'scored';
@@ -161,7 +201,7 @@
     while (idx >= 0 && occ.has(chain[idx])) idx--;
     if (idx < 0) { // nowhere to stand
       entry.sub = 'FC';
-      entry.moves.push({ name: batter.name, path: [plate, bs.first], out: true });
+      entry.moves.push({ name: batter.name, spd: batter.spd, hp1: batter.hp1, path: [plate, bs.first], out: true });
       return 'out';
     }
     let land = chain[idx];
@@ -174,15 +214,15 @@
         if (geo.rnd() < stretchChance(eft)) {
           if (dLand <= 1) {
             entry.runs++; entry.scorers.push(batter.name);
-            entry.moves.push({ name: batter.name, path: pathNodes.concat([target]), scored: true });
+            entry.moves.push({ name: batter.name, spd: batter.spd, hp1: batter.hp1, path: pathNodes.concat([target]), scored: true });
             return 'scored';
           }
           if (!occ.has(nx)) { land = nx; pathNodes.push(nx); }
         }
       }
     }
-    occ.set(land, Object.assign({ name: batter.name, target }, meta || {}));
-    entry.moves.push({ name: batter.name, path: pathNodes });
+    occ.set(land, Object.assign({ name: batter.name, spd: batter.spd, hp1: batter.hp1, target }, meta || {}));
+    entry.moves.push({ name: batter.name, spd: batter.spd, hp1: batter.hp1, path: pathNodes });
     return 'safe';
   }
 
@@ -198,7 +238,7 @@
     if (d != null && d <= 1) {
       occ.delete(node);
       entry.runs++; entry.scorers.push(r.name);
-      entry.moves.push({ name: r.name, path: [node, r.target], scored: true });
+      entry.moves.push({ name: r.name, spd: r.spd, hp1: r.hp1, path: [node, r.target], scored: true });
       return true;
     }
     const nx = P.next[node];
@@ -206,7 +246,7 @@
     if (!pushInto(occ, nx, paths, entry, visited)) return false;
     occ.delete(node);
     occ.set(nx, r);
-    entry.moves.push({ name: r.name, path: [node, nx] });
+    entry.moves.push({ name: r.name, spd: r.spd, hp1: r.hp1, path: [node, nx] });
     return true;
   }
 
@@ -215,12 +255,12 @@
     if (!bs) { entry.sub = 'NOPATH'; return; }
     if (bs.startDist <= 1) { // direct plate-to-plate edge: a walk is a run
       entry.runs++; entry.scorers.push(batter.name);
-      entry.moves.push({ name: batter.name, path: [plate, target], scored: true });
+      entry.moves.push({ name: batter.name, spd: batter.spd, hp1: batter.hp1, path: [plate, target], scored: true });
       return;
     }
     if (pushInto(occ, bs.first, paths, entry, new Set())) {
-      occ.set(bs.first, Object.assign({ name: batter.name, target }, meta || {}));
-      entry.moves.push({ name: batter.name, path: [plate, bs.first] });
+      occ.set(bs.first, Object.assign({ name: batter.name, spd: batter.spd, hp1: batter.hp1, target }, meta || {}));
+      entry.moves.push({ name: batter.name, spd: batter.spd, hp1: batter.hp1, path: [plate, bs.first] });
     } else {
       entry.sub = 'CROWD'; // every path node ahead is jammed
     }
@@ -283,9 +323,9 @@
       for (const e of exposed) {
         occ.delete(e.node);
         if (e.d <= 1) { entry.runs++; entry.scorers.push(e.r.name); entry.sub = 'SF';
-          entry.moves.push({ name: e.r.name, path: [e.node, e.r.target], scored: true }); }
+          entry.moves.push({ name: e.r.name, spd: e.r.spd, hp1: e.r.hp1, path: [e.node, e.r.target], scored: true }); }
         else if (!occ.has(e.nx)) { occ.set(e.nx, e.r);
-          entry.moves.push({ name: e.r.name, path: [e.node, e.nx] }); }
+          entry.moves.push({ name: e.r.name, spd: e.r.spd, hp1: e.r.hp1, path: [e.node, e.nx] }); }
         else occ.set(e.node, e.r);
       }
       batterAdvance(occ, batter, plate, target, 1, layout, paths, entry, { origin: plate });
@@ -338,7 +378,7 @@
       const legFt = ftBetween(posOf(layout, e.node), posOf(layout, e.nx));
       // tagging up he is already leaning, timing the catch, so he is gone
       // quicker off the bag than a runner reacting to a ball on the ground
-      const advT = tLeave + (caught ? 0.1 : 0.2) + legFt / RUN_FTS;
+      const advT = tLeave + (caught ? 0.1 : 0.2) + runSec(e.r, legFt, false);
       const margin = playTime(e.nx) - advT; // positive: runner beats the play
       const mustGo = forced.has(e.node);
       // A run is worth more than a base. A runner one step from scoring
@@ -361,12 +401,12 @@
         occ.delete(g0.node);
         entry.sub = 'CUT';
         entry.runnersOut.push(g0.r.name);
-        entry.moves.push({ name: g0.r.name, path: [g0.node, g0.nx], out: true, tGo: g0.tGo });
+        entry.moves.push({ name: g0.r.name, spd: g0.r.spd, hp1: g0.r.hp1, path: [g0.node, g0.nx], out: true, tGo: g0.tGo });
         entry.throwTo = g0.nx;
         batterSafe = true;
         goers.shift();
         if (bs) { // relay throw for the double play?
-          const bT = 0.15 + ftBetween(posOf(layout, plate), posOf(layout, bs.first)) / RUN_FTS;
+          const bT = runSec(batter, ftBetween(posOf(layout, plate), posOf(layout, bs.first)), true);
           // the relay starts when the first out is actually recorded, and
           // still needs a body on the batter's bag at the other end
           const relayT = playTime(g0.nx) + 0.5 +
@@ -378,7 +418,7 @@
             outs++;
             entry.sub = 'DP';
             entry.runnersOut.push(batter.name);
-            entry.moves.push({ name: batter.name, path: [plate, bs.first], out: true });
+            entry.moves.push({ name: batter.name, spd: batter.spd, hp1: batter.hp1, path: [plate, bs.first], out: true });
             batterSafe = false;
           }
         }
@@ -388,10 +428,10 @@
         if (g.d <= 1) {
           entry.runs++; entry.scorers.push(g.r.name);
           if (!entry.sub) entry.sub = 'SF';
-          entry.moves.push({ name: g.r.name, path: [g.node, g.r.target], scored: true, tGo: g.tGo });
+          entry.moves.push({ name: g.r.name, spd: g.r.spd, hp1: g.r.hp1, path: [g.node, g.r.target], scored: true, tGo: g.tGo });
         } else if (!occ.has(g.nx)) {
           occ.set(g.nx, g.r);
-          entry.moves.push({ name: g.r.name, path: [g.node, g.nx], tGo: g.tGo });
+          entry.moves.push({ name: g.r.name, spd: g.r.spd, hp1: g.r.hp1, path: [g.node, g.nx], tGo: g.tGo });
         } else {
           occ.set(g.node, g.r); // blocked — scrambles back
         }
@@ -402,7 +442,7 @@
         { origin: plate }) === 'out') { outs++; entry.sub = 'DP'; }
     } else if (entry.sub !== 'DP') {
       if (bs) {
-        entry.moves.push({ name: batter.name, path: [plate, bs.first], out: true });
+        entry.moves.push({ name: batter.name, spd: batter.spd, hp1: batter.hp1, path: [plate, bs.first], out: true });
         if (!entry.throwTo) entry.throwTo = bs.first;
       }
     }
@@ -432,10 +472,11 @@
      * already recorded who and when; on a hit or a homer nobody was retired
      * but somebody still gives chase, so work that out here.
      */
-    let def = null, chaser = null, byId = {};
+    let def = null, chaser = null;
+    const D = slots || F.fielderSlots(layout);
+    const byId = {};
+    for (const s of D) byId[s.id] = s;
     if (entry.contact) {
-      const D = slots || F.fielderSlots(layout);
-      for (const s of D) byId[s.id] = s;
       if (entry.defense) {
         def = entry.defense;
       } else {
@@ -507,6 +548,15 @@
           });
         }
       }
+    } else {
+      /* Nothing was put in play, but a pitch was still thrown: it finishes
+       * in the catcher's glove. A strikeout used to animate as a ball
+       * crossing an empty plate and stopping in mid-air.
+       */
+      const c = byId['C-' + entry.plate];
+      if (c && F.finite(c)) {
+        ballPts.push({ x: c.x, y: c.y, t: tPitch + 0.18, leg: 'pitch' });
+      }
     }
     tracks.push({ kind: 'ball', pts: ballPts });
 
@@ -522,10 +572,19 @@
       let t = Math.max(tBreak, tHit + (mv.tGo || 0));
       for (let i = 0; i < mv.path.length; i++) {
         const p = posOf(layout, mv.path[i]);
-        if (i > 0) t += ftBetween(posOf(layout, mv.path[i - 1]), p) / RUN_FTS;
+        // the same clock the engine used to decide the play: his own sprint
+        // speed, and his own start-up cost on the leg that begins at rest
+        if (i > 0) {
+          t += runSec(mv, ftBetween(posOf(layout, mv.path[i - 1]), p),
+            i === 1 && mv.path[0] === entry.plate);
+        }
         pts.push({ x: p.x, y: p.y, t });
       }
-      tracks.push({ kind: 'runner', name: mv.name, out: !!mv.out, scored: !!mv.scored, pts });
+      tracks.push({
+        kind: 'runner', name: mv.name, spd: mv.spd, hp1: mv.hp1,
+        fromPlate: mv.path[0] === entry.plate,
+        out: !!mv.out, scored: !!mv.scored, pts,
+      });
     }
 
     if (def) {
@@ -557,14 +616,50 @@
       }
     }
 
+    /* Everybody standing in a batter's box gets drawn, whatever the pitch
+     * did. A batter who never leaves — struck out, or held on a walk that
+     * did not force him — was previously not on screen at all. And when
+     * every plate is live, the men waiting at the other plates are the
+     * whole point of the format, so they are drawn too (`otherBatters`).
+     */
+    let tEnd = 0;
+    for (const tr of tracks) tEnd = Math.max(tEnd, tr.pts[tr.pts.length - 1].t);
+    const boxes = [{ plate: entry.plate, name: entry.batter }]
+      .concat(entry.otherBatters || []);
+    const drawn = new Set();
+    for (const b of boxes) {
+      if (!b || !b.name || drawn.has(b.name)) continue;
+      const bp = posOf(layout, b.plate);
+      if (!F.finite(bp)) continue;
+      drawn.add(b.name);
+      // a man who reaches base holds the box until he breaks, then his
+      // runner track takes over; a man who never leaves holds it all play
+      const run = tracks.find((t) => t.kind === 'runner' && t.name === b.name);
+      const until = run ? run.pts[0].t : Math.max(tEnd, tPitch + 0.3);
+      if (until <= 0.02) continue;   // he was gone before the pitch landed
+      tracks.push({
+        kind: 'batter', name: b.name, spd: b.spd, hp1: b.hp1, plate: b.plate,
+        atBat: b.plate === entry.plate, handsOff: !!run,
+        pts: [{ x: bp.x, y: bp.y, t: 0 }, { x: bp.x, y: bp.y, t: until }],
+      });
+    }
+
     let dur = 0;
     for (const tr of tracks) dur = Math.max(dur, tr.pts[tr.pts.length - 1].t);
+    /* A marathon play is squeezed into 5s so the broadcast keeps moving.
+     * The factor is recorded because it is per-play: two appearances from
+     * the same delivery window can be squeezed by different amounts, and
+     * laying them on a shared clock as-is puts runners on screen at three
+     * times each other's pace when the engine says they all run 27 ft/s.
+     * Anything merging timelines must undo this first (buildCycleAnim).
+     */
+    let squeeze = 1;
     if (dur > 5) {
-      const s = 5 / dur;
-      for (const tr of tracks) for (const p of tr.pts) p.t *= s;
+      squeeze = 5 / dur;
+      for (const tr of tracks) for (const p of tr.pts) p.t *= squeeze;
       dur = 5;
     }
-    entry.anim = { dur: dur + 0.2, tracks };
+    entry.anim = { dur: dur + 0.2, squeeze, tracks };
   }
 
   function playHalf(side, layout, paths, slots, cfg, rnd, log, ctx) {
@@ -593,7 +688,7 @@
           occ.delete(node);
           entry.runs++; entry.scorers.push(r.name);
           entry.moves.push({
-            name: r.name,
+            name: r.name, spd: r.spd, hp1: r.hp1,
             path: paths[r.target].dist[node] != null
               ? chainToTarget(paths, r.target, node) : [node, r.target],
             scored: true,
@@ -603,7 +698,7 @@
         const bs = L.batterStart(layout, paths, plate, target);
         if (bs) {
           entry.moves.push({
-            name: batter.name,
+            name: batter.name, spd: batter.spd, hp1: batter.hp1,
             path: [plate].concat(chainToTarget(paths, target, bs.first)), scored: true,
           });
         }
@@ -638,7 +733,7 @@
 
   function makeSide(team) {
     return {
-      abbr: team.abbr, name: team.name, color: team.color,
+      abbr: team.abbr, name: team.name, spd: team.spd, hp1: team.hp1, color: team.color,
       lineup: team.lineup, spot: 0, plateIdx: 0,
       runs: 0, hits: 0, homers: 0, line: [],
     };
@@ -646,7 +741,7 @@
 
   function sideResult(s) {
     return {
-      abbr: s.abbr, name: s.name, color: s.color,
+      abbr: s.abbr, name: s.name, spd: s.spd, hp1: s.hp1, color: s.color,
       runs: s.runs, hits: s.hits, homers: s.homers, line: s.line,
     };
   }
@@ -726,6 +821,7 @@
       advanceRunners, batterAdvance, walkAdvance, pushInto, makeSide, sideResult,
       resolveBallOut, contactFor, buildAnim, chainToTarget, posOf, ftBetween,
       RUN_FTS, THROW_FTS, PITCH_FTS, HIT_FTS, throwSec,
+      runSec, startCost, topSpeed, LEAD_FT, BASE_START,
     },
   };
   if (IS_NODE) module.exports = API;

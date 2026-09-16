@@ -141,8 +141,12 @@ check('defensive plays carry a throw target for the ball track', sawCut && throw
   check('the ball holds where it landed until it is fielded',
     got && got.x === land.x && got.y === land.y && got.t >= land.t - 1e-9,
     `landed ${land.t.toFixed(2)}s, fielded ${got.t.toFixed(2)}s`);
+  // screen time is squeezed to the broadcast cap, engine time is not, so
+  // divide the factor out before comparing them -- this passed by luck only
+  // while the sampled play happened to be shorter than the cap
   check('the wait matches the engine own fielding time',
-    Math.abs((got.t - land.t) - (e.defense.tSecure - e.contact.distFt / 110)) < 1e-6);
+    Math.abs((got.t - land.t) / (e.anim.squeeze || 1)
+      - (e.defense.tSecure - e.contact.distFt / 110)) < 1e-6);
 }
 
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) FAILED.`);

@@ -20,12 +20,20 @@
     });
   }
 
-  function clockwiseNext(id) {
+  // Next plate clockwise. A three-plate field cycles H1->H2->H3; an N-plate
+  // ring cycles through however many homes it has, so pass the layout
+  // whenever there may be more than three.
+  function clockwiseNext(id, layout) {
+    if (layout && Array.isArray(layout.homes) && layout.homes.length !== 3) {
+      const ids = layout.homes.map((h) => h.id);
+      const i = ids.indexOf(id);
+      return i < 0 ? undefined : ids[(i + 1) % ids.length];
+    }
     return { H1: 'H2', H2: 'H3', H3: 'H1' }[id];
   }
 
   function targetOf(layout, plateId) {
-    return layout.scoreRule === 'own' ? plateId : clockwiseNext(plateId);
+    return layout.scoreRule === 'own' ? plateId : clockwiseNext(plateId, layout);
   }
 
   function findNode(layout, id) {
@@ -179,7 +187,7 @@
     const layout = {
       spacing: spacingFt, scoreRule: 'cw',
       pitchMode: 'tri',    // 'tri' = all plates pitch in a shared 1s window
-      runMode: 'origin',   // runners release on 'origin' plate's hit or 'any'
+      runMode: 'any',      // runners release on 'any' plate's hit, or 'origin'
       moundDist: 60.5,     // rubber-to-plate ft; deltas shift batting rates
       homes: homePositions(spacingFt), nodes: [], edges: [], nextId: 1,
     };
@@ -232,6 +240,30 @@
     const ids = ['H1'].concat(layout.nodes.map((nd) => nd.id));
     for (let i = 0; i < ids.length; i++) {
       layout.edges.push({ from: ids[i], to: ids[(i + 1) % ids.length] });
+    }
+    return layout;
+  }
+
+  /* Every vertex of that same (B+1)-gon is a live home plate: B+1 batters,
+   * one per plate, all delivering inside the shared 1s window (trisim.js).
+   * scoreRule 'own' means each batter runs the whole ring back to his own
+   * plate -- the same B+1 steps a classic batter runs -- so what moves the
+   * run environment is contention for nodes, not retuned outcomes. sim.js is
+   * never consulted here, so the published classic numbers are untouched.
+   */
+  function makeNgonMulti(bases, spacingFt) {
+    const ring = makeNgon(bases, spacingFt);
+    const verts = [{ x: ring.homes[0].x, y: ring.homes[0].y }]
+      .concat(ring.nodes.map((n) => ({ x: n.x, y: n.y })));
+    const homes = verts.map((v, i) => ({ id: 'H' + (i + 1), x: v.x, y: v.y }));
+    const layout = {
+      spacing: ring.spacing, scoreRule: 'own',
+      pitchMode: 'tri', runMode: 'any', moundDist: 60.5,
+      classicMulti: Math.max(1, bases | 0),
+      homes, nodes: [], edges: [], nextId: 1,
+    };
+    for (let i = 0; i < homes.length; i++) {
+      layout.edges.push({ from: homes[i].id, to: homes[(i + 1) % homes.length].id });
     }
     return layout;
   }
@@ -334,7 +366,7 @@
     rotatePoint, rotCounterpart,
     addNodeSym, moveNodeSym, removeNodeSym, addEdgeSym, removeEdgeSym,
     basesCentroid, moundPositions,
-    makeStarter, makeNgon, buildPaths, batterStart, routeOf, validate,
+    makeStarter, makeNgon, makeNgonMulti, buildPaths, batterStart, routeOf, validate,
     serialize, deserialize,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
