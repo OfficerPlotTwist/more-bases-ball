@@ -364,3 +364,8 @@ population — bat tracking covers 0.07 of what the widest board does, arm
 strength 0.28. It also lists `leagueOnlySeasons`, club-seasons with team
 totals but no player rows (mostly Negro Leagues clubs 1920-1948 and the
 1914-15 Federal League) — a results page touching those years should say so.
+
+`data.js` above is not generated from this spine and should not be: it's
+frozen so the run-environment numbers already published in this README, and
+the box scores `tests/ngon.test.js` checks, don't move underneath anyone.
+Swapping it over is a future project, not a follow-up to this one.

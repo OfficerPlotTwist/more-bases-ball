@@ -126,3 +126,9 @@ generated and gitignored.
   provenance, not an apology.
 - Spine tests skip cleanly when `data/` is absent, so a fresh clone with no
   network still shows the original twelve green.
+- **`data.js` is unchanged and stays that way.** It is the committed slice
+  the browser sim loads; its run environment is published in the README and
+  `tests/ngon.test.js` asserts the box scores do not move. Regenerating it
+  from the spine is a later sub-project, gated by a golden-run identity test
+  — do it here and the published numbers move under the reader and the test
+  suite goes red.
