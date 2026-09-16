@@ -3,26 +3,16 @@
  *   node tools/build-data.mjs [firstYear] [lastYear]      (default 2021 2025)
  *
  * ---------------------------------------------------------------------------
- * DO NOT RUN THIS. data.js is frozen, and this script has a known bug.
+ * Rerunning this REGENERATES data.js, the committed slice the browser sim
+ * loads. Its run environment is a published result — the runs/game figures in
+ * README.md and the box score tests/ngon.test.js asserts — so a rebuild moves
+ * numbers a reader may have already seen. Re-measure and report the delta
+ * rather than quietly shipping it.
  *
- * 1. data.js is frozen. It is the committed slice the browser sim loads, and
- *    its run environment is a PUBLISHED result — the runs/game figures in
- *    README.md (1 base ~18 runs/game, 7 bases ~6) and the byte-identical box
- *    score tests/ngon.test.js asserts. Regenerating data.js moves those
- *    numbers under the reader and turns the suite red. Regenerating it from
- *    the spine is a later sub-project, gated by a golden-run identity test.
- *
- * 2. This script double-counts traded players. The hydrate below asks for
- *    season hitting stats WITHOUT `,team)`, so `stats.splits[0]` (see the
- *    `split` line further down) is the player's COMBINED season line, and it
- *    gets stamped on whichever club happened to fetch him — 18 affected
- *    players in 2024 alone. tools/build-seasons.mjs fixes this with its
- *    `ownSplit` helper plus a `,team)` on the hydrate; this file was left
- *    unfixed deliberately, because fixing it would change data.js.
- *
- * So running this both unfreezes data.js and reintroduces the traded-player
- * double-count. The npm script is named `build:data:frozen-do-not-run` for
- * the same reason. Use tools/build-seasons.mjs for the data spine instead.
+ * The traded-player double-count this script used to carry is FIXED: the
+ * hydrate asks for `,team)` and `ownSplit` below picks the club's own split.
+ * Do not drop either half — see the comment on ownSplit for why a lone
+ * team-labelled split must never be accepted as a fallback.
  * ---------------------------------------------------------------------------
  *
  * Two sources, joined on MLBAM player id — an exact join, never name matching:
@@ -66,6 +56,24 @@ const COLORS = {
 const esc = (s) => JSON.stringify(String(s));
 const NL = '\n';
 
+/* A traded player's splits[0] is the COMBINED season total (carries
+ * numTeams), not that club's line — per-club lines are splits[1..N]. The
+ * hydrate must ask for `team` on the stat split or `split.team` is absent
+ * everywhere and a club-id match finds nothing. Never fall back to a
+ * numTeams-bearing split: a combined line attributed to one club is the
+ * exact bug this exists to prevent. Mirrors tools/build-seasons.mjs. */
+function ownSplit(stats, clubId) {
+  const splits = (stats && stats.splits) || [];
+  const own = splits.find((s) => s.team && s.team.id === clubId);
+  /* A lone split may only be used as a fallback if it carries NO team at
+   * all. If it names a team, that team must match clubId — a roster spot
+   * fetched from a DIFFERENT club can return the same single split and it
+   * must not be accepted just because it's the only split present. */
+  const teamless = splits.length === 1 && !splits[0].team && !splits[0].numTeams
+    ? splits[0] : null;
+  return own || teamless || null;
+}
+
 const seasons = {};
 for (const year of YEARS) {
   const list = await getJson(
@@ -75,12 +83,12 @@ for (const year of YEARS) {
   const rows = await pool(clubs, 4, async (club) => {
     const url = `https://statsapi.mlb.com/api/v1/teams/${club.id}/roster`
       + `?season=${year}&rosterType=fullSeason`
-      + `&hydrate=person(stats(type=season,group=hitting,season=${year}))`;
+      + `&hydrate=person(stats(type=season,group=hitting,season=${year},team))`;
     const j = await getJson(url);
     const players = [];
     for (const spot of j.roster || []) {
       const stats = spot.person && spot.person.stats && spot.person.stats[0];
-      const split = stats && stats.splits && stats.splits[0];
+      const split = ownSplit(stats, club.id);
       const st = split && split.stat;
       const pos = spot.position && spot.position.abbreviation;
       if (!st || !st.plateAppearances || pos === 'P') continue;
