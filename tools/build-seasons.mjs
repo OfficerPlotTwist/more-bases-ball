@@ -107,10 +107,17 @@ const years = [];
 const startedAt = new Date().toISOString();
 let finishedLoop = false;
 
+/* `clubsFetched` only says the two roster requests resolved — a club whose
+ * fetch succeeds but yields no usable rows still counts. Completeness must
+ * therefore also require `clubsWithRows`, or a year short a whole club's
+ * worth of players can still be asserted complete. Keep both fields: "fetch
+ * failed" and "fetched but empty" are different diagnoses. */
+const yearIsClean = (y) => y.clubsFetched === y.clubsExpected
+  && y.clubsWithRows === y.clubsExpected;
+
 const writeManifest = () => {
-  const complete = finishedLoop && failures.length === 0
-    && years.every((y) => y.clubsFetched === y.clubsExpected);
-  fs.writeFileSync(MANIFEST, `${JSON.stringify({
+  const complete = finishedLoop && failures.length === 0 && years.every(yearIsClean);
+  const body = `${JSON.stringify({
     tool: 'build-seasons.mjs',
     startedAt,
     finishedAt: new Date().toISOString(),
@@ -119,9 +126,17 @@ const writeManifest = () => {
     lastYear: LAST,
     years,
     failures,
-  }, null, 2)}\n`);
+  }, null, 2)}\n`;
+  /* Write-then-rename: a kill mid-write must never leave corrupt JSON in
+   * the one artifact downstream tasks gate on. rename is atomic on NTFS
+   * and POSIX alike. */
+  const tmp = `${MANIFEST}.tmp`;
+  fs.writeFileSync(tmp, body);
+  fs.renameSync(tmp, MANIFEST);
   return complete;
 };
+
+let manifestComplete = false;
 
 try {
 for (let year = FIRST; year <= LAST; year++) {
@@ -198,8 +213,12 @@ for (let year = FIRST; year <= LAST; year++) {
   if (fetchedClubs !== clubs.length) {
     console.log(`WARN ${year}: expected ${clubs.length} clubs, fetched ${fetchedClubs}`);
   }
+  const clubsWithRows = perClub.filter((r) => r.rows.length > 0).length;
+  if (clubsWithRows !== clubs.length) {
+    console.log(`WARN ${year}: expected ${clubs.length} clubs, ${clubsWithRows} contributed rows`);
+  }
   const entry = {
-    year, clubsExpected: clubs.length, clubsFetched: fetchedClubs,
+    year, clubsExpected: clubs.length, clubsFetched: fetchedClubs, clubsWithRows,
     seasonRows: 0, leagueRows: 0,
   };
   years.push(entry);
@@ -269,7 +288,7 @@ finishedLoop = true;
   /* Always written, including when the loop throws: a manifest saying
    * complete:false is the whole point, and a MISSING manifest tells a
    * later reader nothing at all. */
-  writeManifest();
+  manifestComplete = writeManifest();
 }
 
 fs.rmSync(TMP, { recursive: true, force: true });
@@ -283,8 +302,10 @@ console.log(`  pit  ${totalPit} player-seasons`);
 
 await db.close();
 
-const short = years.filter((y) => y.clubsFetched !== y.clubsExpected);
-console.log(`manifest ${MANIFEST}  complete=${failures.length === 0 && short.length === 0}`);
+const short = years.filter((y) => !yearIsClean(y));
+/* Report the manifest's OWN flag, never a second copy of the predicate —
+ * two spellings of the same rule drift the first time one is edited. */
+console.log(`manifest ${MANIFEST}  complete=${manifestComplete}`);
 
 /* A partial spine must never exit 0 — silent partial data is exactly what
  * would let coverage.json (Task 6) measure a truncated dataset as complete.
@@ -297,7 +318,10 @@ if (failures.length || short.length) {
   }
   if (short.length) {
     console.log(`\n${short.length} year(s) short of their club count:`);
-    for (const y of short) console.log(`  ${y.year}: ${y.clubsFetched}/${y.clubsExpected}`);
+    for (const y of short) {
+      console.log(`  ${y.year}: fetched ${y.clubsFetched}/${y.clubsExpected},`
+        + ` with rows ${y.clubsWithRows}/${y.clubsExpected}`);
+    }
   }
   process.exitCode = 1;
 }

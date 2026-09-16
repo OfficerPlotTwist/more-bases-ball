@@ -125,13 +125,18 @@ function check(label, ok, detail) {
       : `complete=${manifest.complete} years=${(manifest.years || []).length}`
         + ` failures=${(manifest.failures || []).length}`);
 
+  // A club whose roster fetch SUCCEEDS but yields no usable rows still counts
+  // as fetched, so clubsFetched alone cannot prove a year is fully populated —
+  // clubsWithRows is the check that actually catches an empty club.
   const shortYears = ((manifest && manifest.years) || [])
-    .filter((y) => Number(y.clubsFetched) < Number(y.clubsExpected));
+    .filter((y) => Number(y.clubsFetched) < Number(y.clubsExpected)
+      || Number(y.clubsWithRows) < Number(y.clubsExpected));
   check('no year lost a club during the build', manifest !== null && shortYears.length === 0,
     `short=${shortYears.length}`
     + (shortYears.length
       ? ` first: ${shortYears.slice(0, 3)
-        .map((y) => `${y.year} ${y.clubsFetched}/${y.clubsExpected}`).join(', ')}`
+        .map((y) => `${y.year} fetched ${y.clubsFetched}/${y.clubsExpected}`
+          + ` rows ${y.clubsWithRows}/${y.clubsExpected}`).join(', ')}`
       : ''));
 
   // Team totals: the only Tier A source of team-games, so runs/game is exact.
