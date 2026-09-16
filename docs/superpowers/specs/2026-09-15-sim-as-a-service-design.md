@@ -128,6 +128,37 @@ Escape-hatch path (The Show only):
 
 Generated code never executes outside the worktree sandbox before approval.
 
+### The review queue is the real scaling limit
+
+Infrastructure here is flat. The thing that scales with customer count is **Nik's
+time**, because he is the gate. At The Show's 20 included forks/month and ~5
+minutes to read a rule, a diff and its test output:
+
+| Show subscribers | Reviews/mo | Per working day | Time/day |
+|---|---|---|---|
+| 10 | 200 | 9 | ~45 min |
+| 25 | 500 | 23 | ~2 hours |
+| 50 | 1,000 | 45 | ~4 hours |
+
+**The Show caps out around 25 subscribers** before review eats a third of a
+working day. That is the business's real ceiling, and no amount of cheaper
+hosting moves it.
+
+A second exposure sits underneath it: at 25 subscribers all using their full
+allowance, 500 forks at ~$2.75 each is ~$1,375/month of agent cost against
+~$1,475/month of revenue. **The Show's margin depends on under-utilization.**
+The credit bucket is what contains this — 20 included, $5/fork overage against a
+~$2.75 cost, so heavy users become profitable rather than ruinous. Do not
+replace it with "unlimited."
+
+The escape valve, when the queue becomes the bottleneck, is **not** hiring
+reviewers or dropping the gate. It is narrowing what reaches the human: promote
+forks that clear a stricter automated bar (tests green, diff confined to known
+files, no new dependencies, no filesystem or network calls added) to
+auto-approval, and route only the ones that fail that bar to the daily queue.
+That preserves the safety property — no unreviewed arbitrary code — while making
+the human cost scale with *novelty* instead of with volume.
+
 ## 4. Diagnostics
 
 Baseline and variant run with the same seed and the same player population, so
@@ -149,6 +180,35 @@ Renders a static results page per request to object storage at an unguessable
 URL. Reuses `field3d.js` to show one signature play under the new rule — the
 existing renderer already draws `entry.anim` and decides nothing, so it needs no
 changes. Page includes the coverage table and the exact `rule.json`.
+
+### Three constraints that decide whether traffic costs anything
+
+Storage is O(1), not O(customers): one spine serves every simulation, so the
+dataset is ~$0.02/month flat whether there are five customers or five thousand.
+Result pages add ~$0.08/month at 10,000 pages. The only term that can grow
+without bound is **egress**, and these three rules hold it near zero.
+
+1. **A results page must never query the spine live.** No DuckDB-WASM, no
+   Parquet fetched into the browser. A page that queried the 1.2 GB lake
+   client-side would pull tens to hundreds of MB *per visit* and egress would
+   become the dominant cost of the whole business. The publisher runs after the
+   runner finishes, so the diagnostics are already computed — they ship **baked
+   into the page as JSON**. A visit is a few hundred KB.
+2. **One shared `three.js` URL for every page, never a per-page copy.**
+   Measured in this repo: `vendor/three.module.js` is 1,358,975 bytes raw and
+   266,917 gzipped, plus 33,657 for `OrbitControls.js` — about 275 KB over the
+   wire compressed. Served from one URL it is cached once by the CDN and once by
+   each browser. Copied per customer page it multiplies per-visit weight several
+   times over and defeats caching entirely.
+3. **Zero-egress object storage.** Cloudflare R2 bills nothing for egress;
+   S3 bills ~$0.09/GB. On a static-results architecture that is the difference
+   between visits being free and visits being a line item.
+
+Auth-gating a page adds a small per-request floor (roughly $0.15 per million
+edge-function invocations) because a gated page cannot be pure CDN-static. That
+is real and negligible. Gating *reduces* total egress by collapsing visits from
+"however many people share the link" to "the customer and a few friends" — the
+tradeoff is losing viral-traffic upside, not paying more.
 
 ## 6. Commerce
 
