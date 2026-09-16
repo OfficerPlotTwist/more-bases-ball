@@ -86,6 +86,20 @@ function check(label, ok, detail) {
     `missing=${missingLeague.length}` +
     (missingLeague.length ? ` first: ${missingLeague.slice(0, 5).join(',')}` : ''));
 
+  // A single stat split shared verbatim across every club that rostered a
+  // player (e.g. a two-way player's one-inning pitching line) must be
+  // attributed once, to his real club — not once per club that fetched it.
+  // This is the assertion that would have caught both prior rounds of the
+  // split-selection bug; a high-volume duplicate (real PA/IP, not a
+  // trivial cameo) is the unambiguous signature of mis-attribution.
+  const dupes = (await db.all(
+    `SELECT count(*) AS n FROM (
+       SELECT mlbam, role, ipouts, pa FROM read_parquet('${glob}')
+       WHERE year = 2019 AND (coalesce(pa,0) > 20 OR coalesce(ipouts,0) > 30)
+       GROUP BY 1,2,3,4 HAVING count(*) > 1)`))[0];
+  check('no duplicate high-volume player-club rows', Number(dupes.n) === 0,
+    `dupes=${dupes.n}`);
+
   // Team totals: the only Tier A source of team-games, so runs/game is exact.
   const rpg = (await db.all(
     `SELECT sum(r) * 1.0 / sum(g) AS v FROM read_parquet('${lg}') WHERE year = 2019`))[0];

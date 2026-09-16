@@ -50,8 +50,15 @@ export const toOuts = (ip) => {
 function ownSplit(stats, clubId) {
   const splits = (stats && stats.splits) || [];
   const own = splits.find((s) => s.team && s.team.id === clubId);
-  const solo = splits.length === 1 && !splits[0].numTeams ? splits[0] : null;
-  return own || solo || null;
+  /* A lone split may only be used as a fallback if it carries NO team at
+   * all. If it names a team, that team must match clubId — a roster spot
+   * fetched from a DIFFERENT club can return the same single split (e.g.
+   * a two-way player's one-inning pitching line, shared verbatim across
+   * every club that carried him that season) and it must not be accepted
+   * just because it's the only split present. */
+  const teamless = splits.length === 1 && !splits[0].team && !splits[0].numTeams
+    ? splits[0] : null;
+  return own || teamless || null;
 }
 
 const leagueAbbrCache = new Map();
