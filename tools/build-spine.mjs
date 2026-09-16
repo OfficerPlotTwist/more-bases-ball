@@ -28,4 +28,19 @@ for (const s of STEPS) {
     process.exit(r.status || 1);
   }
 }
-console.log('\nspine built — run `node tools/run-tests.mjs` to verify');
+/* Verification is not a suggestion. Several of this branch's guarantees — the
+ * crosswalk row counts, coverage.json's measured years, the leagueOnlySeasons
+ * totals — are enforced by the test suite and by no runtime gate, so a build
+ * that "succeeded" without them is unverified, not done. Run them here and
+ * fail the build if they fail, distinguishing the two failure modes in the
+ * exit line so nobody mistakes a bad spine for a bad assertion. */
+console.log('\n=== run-tests.mjs (verification) ===');
+const v = spawnSync(process.execPath, [path.join(HERE, 'run-tests.mjs')], { stdio: 'inherit' });
+if (v.status !== 0) {
+  console.error('\nbuild-spine: VERIFICATION FAILED — every builder completed and the '
+    + 'spine is on disk, but tools/run-tests.mjs reported failures. This is not a '
+    + 'build failure; the data was written and then failed its assertions. Read the '
+    + 'test output above before trusting anything under data/.');
+  process.exit(v.status || 1);
+}
+console.log('\nspine built and verified');

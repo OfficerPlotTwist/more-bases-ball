@@ -24,7 +24,10 @@ import { fileURLToPath } from 'node:url';
 import { openDb, sqlPath } from './lib/duck.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const DATA = path.join(ROOT, 'data');
+/* MBB_DATA_DIR exists so the refusal gate below can be exercised against a
+ * synthetic manifest in a temp dir (tests/coverage.test.js). Unset, it is the
+ * repo's own data/. */
+const DATA = process.env.MBB_DATA_DIR || path.join(ROOT, 'data');
 const g = (...p) => sqlPath(path.join(DATA, ...p));
 
 /* A probe's `source` is derived from which Parquet dataset it reads, not
@@ -65,6 +68,16 @@ const PROBES = [
     grain: 'player-season', statcast: true },
   { key: 'bat_tracking', dataset: 'statcast', where: 'bat_speed IS NOT NULL',
     grain: 'player-season', statcast: true },
+  /* Not a stat intake can require — a column whose population has to stay
+   * VISIBLE. Task 3's source swap left seasons.bbref 100% NULL, which silently
+   * removed the crosswalk's only consumer; probing it means the next person to
+   * reach for build-players.mjs reads `rows: 0` instead of assuming a join
+   * exists. It is reported under `unconsumedColumns`, never under `stats`,
+   * because requireCoverage() treats every entry in `stats` as available and
+   * would answer ok:true for a first/last of null — advertising a join that
+   * has no rows at all is exactly the failure this probe exists to prevent. */
+  { key: 'player_bbref_ids', dataset: 'seasons', where: 'bbref IS NOT NULL',
+    grain: 'player-season', unconsumed: true },
 ];
 
 /* --- Refusal gate: never measure coverage against an unverified spine. --- */
@@ -78,13 +91,14 @@ if (!fs.existsSync(manifestPath)) {
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 if (manifest.complete !== true) {
   console.error('build-coverage: data/_build.json reports complete=false '
-    + `(${manifest.failures.length} failures). Refusing to measure coverage `
+    + `(${(manifest.failures || []).length} failures). Refusing to measure coverage `
     + 'against a partial spine — fix the build first.');
   process.exit(1);
 }
 
 const db = await openDb();
 const stats = {};
+const unconsumedColumns = {};
 
 for (const p of PROBES) {
   /* team_totals is team-season grain — it has no mlbam column, so its
@@ -101,6 +115,19 @@ for (const p of PROBES) {
     `SELECT min(year) AS first, max(year) AS last, count(*) AS rows,
             count(DISTINCT ${idCol}) AS entities
        FROM read_parquet('${src}') WHERE ${p.where}`))[0];
+  if (p.unconsumed) {
+    /* Zero is the interesting answer here, so this branch never omits. */
+    const rows = Number(r.rows);
+    unconsumedColumns[p.key] = {
+      first: r.first == null ? null : Number(r.first),
+      last: r.last == null ? null : Number(r.last),
+      rows,
+      players: Number(r.entities),
+      source, dataset: p.dataset, grain: p.grain,
+    };
+    console.log(`${p.key.padEnd(22)} ${rows} rows (unconsumed column probe)`);
+    continue;
+  }
   if (r.first == null) {
     console.log(`WARN  ${p.key}: no rows matched — omitted from coverage`);
     continue;
@@ -180,6 +207,12 @@ const out = {
   generatedAt: new Date().toISOString(),
   spineBuiltAt: manifest.finishedAt,
   stats,
+  unconsumedColumns: {
+    note: 'Columns probed for population only. They are NOT stats intake can '
+      + 'require — a zero here means the column exists in the schema but the '
+      + 'current source never fills it.',
+    columns: unconsumedColumns,
+  },
   leagueOnlySeasons: {
     totalEmptyClubYears,
     note: 'Clubs MLB lists for a season that have team totals but no '

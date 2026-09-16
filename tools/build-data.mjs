@@ -2,6 +2,29 @@
  *
  *   node tools/build-data.mjs [firstYear] [lastYear]      (default 2021 2025)
  *
+ * ---------------------------------------------------------------------------
+ * DO NOT RUN THIS. data.js is frozen, and this script has a known bug.
+ *
+ * 1. data.js is frozen. It is the committed slice the browser sim loads, and
+ *    its run environment is a PUBLISHED result — the runs/game figures in
+ *    README.md (1 base ~18 runs/game, 7 bases ~6) and the byte-identical box
+ *    score tests/ngon.test.js asserts. Regenerating data.js moves those
+ *    numbers under the reader and turns the suite red. Regenerating it from
+ *    the spine is a later sub-project, gated by a golden-run identity test.
+ *
+ * 2. This script double-counts traded players. The hydrate below asks for
+ *    season hitting stats WITHOUT `,team)`, so `stats.splits[0]` (see the
+ *    `split` line further down) is the player's COMBINED season line, and it
+ *    gets stamped on whichever club happened to fetch him — 18 affected
+ *    players in 2024 alone. tools/build-seasons.mjs fixes this with its
+ *    `ownSplit` helper plus a `,team)` on the hydrate; this file was left
+ *    unfixed deliberately, because fixing it would change data.js.
+ *
+ * So running this both unfreezes data.js and reintroduces the traded-player
+ * double-count. The npm script is named `build:data:frozen-do-not-run` for
+ * the same reason. Use tools/build-seasons.mjs for the data spine instead.
+ * ---------------------------------------------------------------------------
+ *
  * Two sources, joined on MLBAM player id — an exact join, never name matching:
  *   statsapi.mlb.com        full-season rosters + season hitting lines
  *   baseballsavant.mlb.com  Statcast sprint-speed leaderboard (CSV), which
@@ -17,7 +40,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getJson, getText, pool, parseCsv } from './lib/fetch.mjs';
+import { getJson, getText, pool, parseCsv, csvBody } from './lib/fetch.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outFlag = process.argv.indexOf('--out');
@@ -73,7 +96,7 @@ for (const year of YEARS) {
 
   const csv = parseCsv(await getText(
     `https://baseballsavant.mlb.com/leaderboard/sprint_speed`
-    + `?year=${year}&position=&team=&min=10&csv=true`));
+    + `?year=${year}&position=&team=&min=10&csv=true`, csvBody));
   const byId = new Map(csv.map((r) => [
     +r.player_id, { spd: +r.sprint_speed, hp: +r.hp_to_1b },
   ]));

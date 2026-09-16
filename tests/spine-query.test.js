@@ -104,6 +104,43 @@ function check(label, ok, detail) {
     fs.rmSync(noFailuresDir, { recursive: true, force: true });
   }
 
+  // Finding 3 regression: coverage.json and the parquet it measured must come
+  // from the same build. `build-seasons.mjs 2020 2025` rewrites _build.json
+  // while data/seasons/ still holds the older years; build-coverage.mjs then
+  // derives leagueOnlySeasons from the manifest but measures first/last from
+  // the parquet, so one coverage.json describes two builds and a 1924 results
+  // page silently loses its Negro Leagues provenance. spineBuiltAt exists to
+  // make that detectable — coverage() is where it is detected.
+  const staleDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'spine-stale-'));
+  try {
+    fs.writeFileSync(path.join(staleDir, '_build.json'),
+      JSON.stringify({ complete: true, finishedAt: '2026-09-16T03:43:14.982Z' }));
+    fs.writeFileSync(path.join(staleDir, 'coverage.json'),
+      JSON.stringify({ spineBuiltAt: '2026-09-01T00:00:00.000Z', stats: {} }));
+    const stale = await spine.openSpine(staleDir);
+    let staleErr = null;
+    try {
+      await stale.coverage();
+    } catch (e) { staleErr = e; }
+    check('coverage() throws when coverage.json is stale vs the manifest',
+      !!staleErr, staleErr && staleErr.message);
+    check('staleness error names both timestamps',
+      !!staleErr && /2026-09-01T00:00:00\.000Z/.test(staleErr.message)
+        && /2026-09-16T03:43:14\.982Z/.test(staleErr.message)
+        && /stale/.test(staleErr.message),
+      staleErr && staleErr.message);
+
+    // …and a matching pair still loads.
+    fs.writeFileSync(path.join(staleDir, 'coverage.json'),
+      JSON.stringify({ spineBuiltAt: '2026-09-16T03:43:14.982Z', stats: { x: {} } }));
+    const fresh = await stale.coverage();
+    check('coverage() returns normally when the timestamps agree',
+      !!fresh && !!fresh.stats.x, JSON.stringify(fresh.spineBuiltAt));
+    await stale.close();
+  } finally {
+    fs.rmSync(staleDir, { recursive: true, force: true });
+  }
+
   if (!fs.existsSync(path.join(ROOT, 'data', 'coverage.json'))) {
     console.log('skip  data/ not built — query assertions skipped');
     process.exit(failures ? 1 : 0);

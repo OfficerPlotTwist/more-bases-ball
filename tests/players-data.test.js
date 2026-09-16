@@ -5,6 +5,20 @@ const fs = require('fs');
 
 const ROOT = path.join(__dirname, '..');
 const FILE = path.join(ROOT, 'data', 'players.parquet');
+
+// Finding 10 (latent, source-level): the dedupe must partition on the SAME
+// expression the output column is built from. Partitioning on the raw VARCHAR
+// key_mlbam makes '660271' and '0660271' two partitions that both survive and
+// then collapse to one integer mlbam — the dedupe silently does nothing for
+// exactly the rows it exists to catch. This check needs no data on disk, so it
+// runs even on a fresh clone.
+{
+  const src = fs.readFileSync(path.join(ROOT, 'tools', 'build-players.mjs'), 'utf8');
+  const ok = /PARTITION BY\s+TRY_CAST\(key_mlbam AS INTEGER\)/.test(src);
+  console.log(`${ok ? 'ok  ' : 'FAIL'}  dedupe partitions on the cast mlbam, not the raw VARCHAR`);
+  if (!ok) process.exit(1);
+}
+
 if (!fs.existsSync(FILE)) {
   console.log('skip  data/players.parquet not built — run `node tools/build-players.mjs`');
   process.exit(0);

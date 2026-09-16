@@ -3,17 +3,46 @@
 const path = require('path');
 const fs = require('fs');
 
+const os = require('os');
+const { spawnSync } = require('child_process');
+
 const ROOT = path.join(__dirname, '..');
 const FILE = path.join(ROOT, 'data', 'coverage.json');
-if (!fs.existsSync(FILE)) {
-  console.log('skip  data/coverage.json not built — run `node tools/build-coverage.mjs`');
-  process.exit(0);
-}
 
 let failures = 0;
 function check(label, ok, detail) {
   console.log(`${ok ? 'ok  ' : 'FAIL'}  ${label}${detail ? ` — ${detail}` : ''}`);
   if (!ok) failures++;
+}
+
+// Finding 1 regression: the refusal gate must REFUSE, not crash. A manifest of
+// {"complete": false} with no `failures` key made build-coverage.mjs read
+// .length off undefined and die with a raw TypeError stack — the gate still
+// held (non-zero exit) but its carefully-worded refusal never printed, so a
+// user saw a crash at the last step of a multi-minute build and concluded the
+// tool was broken. Exit status alone does not prove this; the wording does.
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cov-nofailures-'));
+  try {
+    fs.writeFileSync(path.join(dir, '_build.json'), JSON.stringify({ complete: false }));
+    const r = spawnSync(process.execPath, [path.join(ROOT, 'tools', 'build-coverage.mjs')],
+      { encoding: 'utf8', env: { ...process.env, MBB_DATA_DIR: dir } });
+    const err = String(r.stderr || '');
+    check('build-coverage exits non-zero on complete:false with no failures key',
+      r.status !== 0, `status=${r.status}`);
+    check('build-coverage prints its refusal, not a TypeError',
+      /Refusing to measure coverage/.test(err) && !/TypeError/.test(err),
+      err.split('\n')[0]);
+    check('refusal reports 0 failures rather than crashing on the missing key',
+      /complete=false \(0 failures\)/.test(err), err.split('\n')[0]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+if (!fs.existsSync(FILE)) {
+  console.log('skip  data/coverage.json not built — run `node tools/build-coverage.mjs`');
+  process.exit(failures ? 1 : 0);
 }
 
 const cov = JSON.parse(fs.readFileSync(FILE, 'utf8'));
@@ -80,6 +109,20 @@ check('leagueOnlySeasons.totalEmptyClubYears === 111',
   los && los.totalEmptyClubYears === 111, String(los && los.totalEmptyClubYears));
 check('leagueOnlySeasons.years["1924"] is non-empty',
   !!(los && Array.isArray(los.years['1924']) && los.years['1924'].length > 0));
+
+// Finding 6: seasons.bbref is 100% NULL since Task 3's source swap, which
+// removed the crosswalk's only consumer. That zero must be REPORTED, not
+// omitted — and it must stay out of `stats`, because requireCoverage() treats
+// everything in `stats` as available and would answer ok:true for a null
+// first/last, advertising a join with no rows behind it.
+const uc = cov.unconsumedColumns && cov.unconsumedColumns.columns;
+check('coverage reports the bbref probe', !!(uc && uc.player_bbref_ids),
+  JSON.stringify(uc && Object.keys(uc)));
+check('player_bbref_ids is reported with rows: 0, not omitted',
+  !!uc && uc.player_bbref_ids && uc.player_bbref_ids.rows === 0,
+  JSON.stringify(uc && uc.player_bbref_ids));
+check('player_bbref_ids is NOT in stats (intake must not treat it as available)',
+  s.player_bbref_ids === undefined);
 
 // Provenance guard: `source` is derived per-stat from the `dataset` a probe
 // actually reads (build-coverage.mjs's DATASET_SOURCE), not declared prose —

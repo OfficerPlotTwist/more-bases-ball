@@ -49,6 +49,24 @@ export const getText = async (url, validate) => {
 
 export const getJson = async (url) => JSON.parse(await getText(url, JSON.parse));
 
+/* The CSV counterpart to getJson's JSON.parse validator. retry() only checks
+ * r.ok, so a 200 carrying a rate-limit/error page, or a truncated body, would
+ * otherwise be written to the disk cache and served forever — build-players.mjs
+ * silently drops such a shard behind its TRY_CAST filter, permanently losing
+ * 1/16th of the crosswalk across every future rebuild. Pass this to getText at
+ * every CSV call site so a bad body throws BEFORE it reaches the cache. */
+export const csvBody = (text) => {
+  const t = String(text).replace(/^﻿/, '');
+  if (t.trimStart().startsWith('<')) {
+    throw new Error('csvBody: response body starts with "<" — looks like HTML, not CSV');
+  }
+  const firstLine = t.split(/\r?\n/, 1)[0];
+  if (!firstLine.includes(',')) {
+    throw new Error('csvBody: no comma in the first line — not a CSV header');
+  }
+  return text;
+};
+
 export const pool = async (items, n, fn) => {
   const out = [];
   let i = 0;

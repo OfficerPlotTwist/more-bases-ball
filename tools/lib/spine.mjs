@@ -105,8 +105,27 @@ export async function openSpine(dataDir = path.join(ROOT, 'data'), opts = {}) {
   const league = sqlPath(path.join(dataDir, 'league', '*.parquet'));
 
   return {
+    /* coverage.json and the parquet it measured must come from the SAME build.
+     * `node tools/build-seasons.mjs 2020 2025` rewrites _build.json with six
+     * year entries while data/seasons/ still holds 1876-2019 from an earlier
+     * run; build-coverage.mjs then derives leagueOnlySeasons from the MANIFEST
+     * but measures first/last from the PARQUET, so one coverage.json describes
+     * two different builds — totalEmptyClubYears collapses toward 0 and
+     * leagueOnlyClubs(cov, 1924) returns [], silently dropping the Negro
+     * Leagues provenance a 1924 results page exists to surface. spineBuiltAt
+     * is written so that is detectable; this is where it gets detected. */
     async coverage() {
-      return JSON.parse(fs.readFileSync(path.join(dataDir, 'coverage.json'), 'utf8'));
+      const cov = JSON.parse(fs.readFileSync(path.join(dataDir, 'coverage.json'), 'utf8'));
+      if (fs.existsSync(manifestPath)) {
+        const builtAt = JSON.parse(fs.readFileSync(manifestPath, 'utf8')).finishedAt;
+        if (cov.spineBuiltAt !== builtAt) {
+          throw new Error('spine: coverage.json is stale relative to the spine build — '
+            + `coverage.json reports spineBuiltAt=${JSON.stringify(cov.spineBuiltAt)} `
+            + `but data/_build.json finished at ${JSON.stringify(builtAt)}. `
+            + 'Re-run `node tools/build-coverage.mjs` against the current spine.');
+        }
+      }
+      return cov;
     },
 
     /* The parsed build manifest, so a results page can state which build

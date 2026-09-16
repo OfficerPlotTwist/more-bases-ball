@@ -7,7 +7,7 @@
   "scripts": {
     "test": "node tools/run-tests.mjs",
     "build:spine": "node tools/build-spine.mjs",
-    "build:data": "node tools/build-data.mjs"
+    "build:data:frozen-do-not-run": "node tools/build-data.mjs"
   },
   "dependencies": {
     "@duckdb/node-api": "1.5.5-r.5"

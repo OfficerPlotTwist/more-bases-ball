@@ -21,7 +21,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getText, parseCsv, cacheStats } from './lib/fetch.mjs';
+import { getText, parseCsv, cacheStats, csvBody } from './lib/fetch.mjs';
 import { openDb, sqlPath } from './lib/duck.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -96,7 +96,7 @@ for (let year = FIRST; year <= LAST; year++) {
 
   for (const b of BOARDS) {
     if (year < b.from) continue;
-    const rows = parseCsv(await getText(b.url(year)));
+    const rows = parseCsv(await getText(b.url(year), csvBody));
     if (!rows.length) { console.log(`  ${year} ${b.key}: EMPTY`); continue; }
     const missing = b.needs.filter((c) => !(c in rows[0]));
     if (missing.length) {
