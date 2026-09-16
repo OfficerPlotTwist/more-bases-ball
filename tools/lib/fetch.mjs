@@ -33,9 +33,25 @@ let misses = 0;
 export const cacheStats = () => ({ hits, misses });
 export const resetCacheStats = () => { hits = 0; misses = 0; };
 
-export const getText = async (url, validate) => {
+/* A season is volatile until it is fully in the past. The current year is
+ * obviously still moving; the prior year still receives late statistical
+ * corrections. Everything older is immutable and cached forever — that is
+ * what keeps a warm rebuild fast. */
+export const isVolatileSeason = (year, now = new Date()) =>
+  year >= now.getFullYear() - 1;
+
+/* The disk cache has no age component ON PURPOSE: baseball history is
+ * immutable, so a TTL would only throw away facts that can never change.
+ * The one thing that is not immutable is a season still being played, and
+ * that is what `opts.fresh` is for — the caller, which knows the year,
+ * asks for a refetch and the fresh body OVERWRITES the stale entry (rather
+ * than skipping the cache) so a later offline rebuild still has something
+ * to fall back on. A forced refetch counts as a miss: a "cache N hits 0
+ * fetched" line must never describe a run that went to the network. */
+export const getText = async (url, validate, opts = {}) => {
   const p = cachePath(url);
-  if (process.env.MBB_CACHE_REFRESH !== '1' && fs.existsSync(p)) {
+  const fresh = opts.fresh === true || process.env.MBB_CACHE_REFRESH === '1';
+  if (!fresh && fs.existsSync(p)) {
     hits++;
     return fs.readFileSync(p, 'utf8');
   }
@@ -47,7 +63,7 @@ export const getText = async (url, validate) => {
   return body;
 };
 
-export const getJson = async (url) => JSON.parse(await getText(url, JSON.parse));
+export const getJson = async (url, opts = {}) => JSON.parse(await getText(url, JSON.parse, opts));
 
 /* The CSV counterpart to getJson's JSON.parse validator. retry() only checks
  * r.ok, so a 200 carrying a rate-limit/error page, or a truncated body, would

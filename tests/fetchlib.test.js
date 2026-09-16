@@ -72,6 +72,49 @@ function check(label, ok, detail) {
   const afterHit = lib.cacheStats();
   check('cacheStats records a hit', afterHit.hits === 1 && afterHit.misses === 1, JSON.stringify(afterHit));
 
+  // isVolatileSeason: the current and prior seasons are still moving; anything
+  // older is immutable. An explicit `now` keeps this from rotting each January.
+  const now = new Date('2026-06-15T00:00:00Z');
+  check('volatile: current season', lib.isVolatileSeason(2026, now) === true);
+  check('volatile: prior season', lib.isVolatileSeason(2025, now) === true);
+  check('volatile: two seasons ago is immutable', lib.isVolatileSeason(2024, now) === false);
+  check('volatile: 1927 is immutable', lib.isVolatileSeason(1927, now) === false);
+
+  // The falsifiable pair. (a) { fresh: true } over an EXISTING cache entry must
+  // go to the network again and overwrite the file on disk; (b) the same URL
+  // without `fresh` must still be served from that cache. (b) is what proves the
+  // fix is scoped to in-progress seasons rather than having disabled caching.
+  const freshUrl = 'https://example.test/season.csv';
+  let freshCalls = 0;
+  lib.setFetch(async () => { freshCalls++; return { ok: true, text: async () => 'march-half-season' }; });
+  const seeded = await lib.getText(freshUrl);
+  check('fresh: cache entry exists first', seeded === 'march-half-season' && fs.existsSync(lib.cachePath(freshUrl)), seeded);
+  const onDiskBefore = fs.readFileSync(lib.cachePath(freshUrl), 'utf8');
+
+  lib.setFetch(async () => { freshCalls++; return { ok: true, text: async () => 'september-full-season' }; });
+  const refetched = await lib.getText(freshUrl, null, { fresh: true });
+  const onDiskAfter = fs.readFileSync(lib.cachePath(freshUrl), 'utf8');
+  check('(a) fresh refetches over an existing entry', freshCalls === 2, `freshCalls=${freshCalls}`);
+  check('(a) fresh returns the new body', refetched === 'september-full-season', refetched);
+  check('(a) fresh overwrites the cached file',
+    onDiskBefore === 'march-half-season' && onDiskAfter === 'september-full-season',
+    `${onDiskBefore} -> ${onDiskAfter}`);
+
+  const without = await lib.getText(freshUrl);
+  check('(b) without fresh the cache still serves', freshCalls === 2, `freshCalls=${freshCalls}`);
+  check('(b) without fresh returns the cached body', without === 'september-full-season', without);
+
+  // A forced refetch is a MISS, not a hit — 'N hits 0 fetched' must never
+  // describe a run that went to the network.
+  const forcedUrl = 'https://example.test/forced.csv';
+  lib.setFetch(async () => ({ ok: true, text: async () => 'forced-body' }));
+  await lib.getText(forcedUrl);
+  lib.resetCacheStats();
+  await lib.getText(forcedUrl, null, { fresh: true });
+  const forcedStats = lib.cacheStats();
+  check('cacheStats counts a forced refetch as a miss',
+    forcedStats.misses === 1 && forcedStats.hits === 0, JSON.stringify(forcedStats));
+
   fs.rmSync(dir, { recursive: true, force: true });
   process.exit(failures ? 1 : 0);
 })();

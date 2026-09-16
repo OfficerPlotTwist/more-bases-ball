@@ -124,6 +124,19 @@ generated and gitignored.
   the team list while player-level data stays thin) plus the 1914-15
   Federal League. Surface that on a results page touching those years; it is
   provenance, not an apology.
+- **The HTTP cache has no TTL, and must not get one** — baseball history is
+  immutable, and existence-keyed caching is what makes a warm rebuild ~30s
+  across ~6000 requests. The one exception is a season that is not over yet:
+  every per-year fetch passes `{ fresh: isVolatileSeason(year) }` (the current
+  year and the one before it, which still takes late corrections) so it
+  refetches and overwrites its cache entry. Add a per-year fetch without it and
+  a September rebuild serves March: that year lands in parquet as a
+  half-season, `_build.json` still says `complete: true`, and `coverage.json`
+  reports it as whole — all three gates pass, because each only asks whether
+  the build lost anything it fetched, never whether what it fetched was
+  current. A forced refetch counts as a cache MISS and both builders name the
+  refetched seasons in their cache line, so `cache N hits 0 fetched` can never
+  describe a run that went to the network.
 - Spine tests skip cleanly when `data/` is absent, so a fresh clone with no
   network still shows the original twelve green.
 - **`data.js` is unchanged and stays that way.** It is the committed slice

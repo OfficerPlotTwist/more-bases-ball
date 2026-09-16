@@ -20,7 +20,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getJson, pool, cacheStats } from './lib/fetch.mjs';
+import { getJson, pool, cacheStats, isVolatileSeason } from './lib/fetch.mjs';
 import { openDb, sqlPath } from './lib/duck.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -141,7 +141,7 @@ let manifestComplete = false;
 
 try {
 for (let year = FIRST; year <= LAST; year++) {
-  const list = await getJson(`${API}/teams?sportId=1&season=${year}`);
+  const list = await getJson(`${API}/teams?sportId=1&season=${year}`, { fresh: isVolatileSeason(year) });
   const clubs = (list.teams || []).filter((t) => t.sport && t.sport.id === 1);
   if (!clubs.length) continue;
 
@@ -165,7 +165,10 @@ for (let year = FIRST; year <= LAST; year++) {
     let hj;
     let pj;
     try {
-      [hj, pj] = await Promise.all([getJson(hitUrl), getJson(pitUrl)]);
+      [hj, pj] = await Promise.all([
+        getJson(hitUrl, { fresh: isVolatileSeason(year) }),
+        getJson(pitUrl, { fresh: isVolatileSeason(year) }),
+      ]);
     } catch (e) {
       const reason = (e && e.message) || String(e);
       failures.push({ year, club: club.abbreviation, error: reason });
@@ -249,8 +252,8 @@ for (let year = FIRST; year <= LAST; year++) {
   let pitJ;
   try {
     [hitJ, pitJ] = await Promise.all([
-      getJson(`${API}/teams/stats?stats=season&group=hitting&season=${year}&sportId=1`),
-      getJson(`${API}/teams/stats?stats=season&group=pitching&season=${year}&sportId=1`),
+      getJson(`${API}/teams/stats?stats=season&group=hitting&season=${year}&sportId=1`, { fresh: isVolatileSeason(year) }),
+      getJson(`${API}/teams/stats?stats=season&group=pitching&season=${year}&sportId=1`, { fresh: isVolatileSeason(year) }),
     ]);
   } catch (e) {
     const reason = (e && e.message) || String(e);
@@ -301,7 +304,15 @@ finishedLoop = true;
 fs.rmSync(TMP, { recursive: true, force: true });
 
 const cs = cacheStats();
-console.log(`cache  ${cs.hits} hits  ${cs.misses} fetched`);
+/* Name the seasons that bypassed the cache, so a human reading the log can
+ * see that an in-progress year was actually refetched and not quietly served
+ * from a months-old entry. */
+const refetched = [];
+for (let y = FIRST; y <= LAST; y++) if (isVolatileSeason(y)) refetched.push(y);
+console.log(`cache  ${cs.hits} hits  ${cs.misses} fetched`
+  + (refetched.length
+    ? `  (${refetched.join(', ')} refetched: in-progress seasons are never served from cache)`
+    : ''));
 console.log(`league  ${leagueYears.length} seasons of team totals`);
 console.log(`seasons ${seasonYears[0]}–${seasonYears[seasonYears.length - 1]}  files ${seasonYears.length}`);
 console.log(`  bat  ${totalBat} player-seasons`);

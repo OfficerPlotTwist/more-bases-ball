@@ -21,7 +21,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getText, parseCsv, cacheStats, csvBody } from './lib/fetch.mjs';
+import { getText, parseCsv, cacheStats, csvBody, isVolatileSeason } from './lib/fetch.mjs';
 import { openDb, sqlPath } from './lib/duck.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -96,7 +96,7 @@ for (let year = FIRST; year <= LAST; year++) {
 
   for (const b of BOARDS) {
     if (year < b.from) continue;
-    const rows = parseCsv(await getText(b.url(year), csvBody));
+    const rows = parseCsv(await getText(b.url(year), csvBody, { fresh: isVolatileSeason(year) }));
     if (!rows.length) { console.log(`  ${year} ${b.key}: EMPTY`); continue; }
     const missing = b.needs.filter((c) => !(c in rows[0]));
     if (missing.length) {
@@ -135,7 +135,15 @@ for (let year = FIRST; year <= LAST; year++) {
 }
 
 const cs = cacheStats();
-console.log(`cache  ${cs.hits} hits  ${cs.misses} fetched`);
+/* Name the seasons that bypassed the cache, so a human reading the log can
+ * see that an in-progress year was actually refetched and not quietly served
+ * from a months-old entry. */
+const refetched = [];
+for (let y = FIRST; y <= LAST; y++) if (isVolatileSeason(y)) refetched.push(y);
+console.log(`cache  ${cs.hits} hits  ${cs.misses} fetched`
+  + (refetched.length
+    ? `  (${refetched.join(', ')} refetched: in-progress seasons are never served from cache)`
+    : ''));
 await db.close();
 }
 
