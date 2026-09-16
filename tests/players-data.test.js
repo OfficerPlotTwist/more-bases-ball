@@ -21,8 +21,19 @@ function check(label, ok, detail) {
   const db = await openDb();
   const f = sqlPath(FILE);
 
+  // Ground-truth counts from Chadwick Register as of 2026-09-15.
+  // A mismatch indicates either upstream data changed or the build lost rows.
   const n = (await db.all(`SELECT count(*) AS n FROM read_parquet('${f}')`))[0];
-  check('crosswalk covers the MLB universe', Number(n.n) > 20000, `n=${n.n}`);
+  check('player count is 23666 (register as of 2026-09-15)', Number(n.n) === 23666, `n=${n.n}`);
+
+  const bbrefCount = (await db.all(`SELECT count(*) AS n FROM read_parquet('${f}') WHERE bbref IS NOT NULL`))[0];
+  check('bbref non-null count is 23664', Number(bbrefCount.n) === 23664, `n=${bbrefCount.n}`);
+
+  const retroCount = (await db.all(`SELECT count(*) AS n FROM read_parquet('${f}') WHERE retro IS NOT NULL`))[0];
+  check('retro non-null count is 23200', Number(retroCount.n) === 23200, `n=${retroCount.n}`);
+
+  const fangraphsCount = (await db.all(`SELECT count(*) AS n FROM read_parquet('${f}') WHERE fangraphs IS NOT NULL`))[0];
+  check('fangraphs non-null count is 21177', Number(fangraphsCount.n) === 21177, `n=${fangraphsCount.n}`);
 
   // Shohei Ohtani: MLBAM 660271, bbref ohtansh01.
   const ohtani = (await db.all(

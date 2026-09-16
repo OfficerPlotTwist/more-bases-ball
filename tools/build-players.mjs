@@ -33,16 +33,16 @@ const out = sqlPath(path.join(OUT, 'players.parquet'));
 await db.run(`COPY (
   SELECT
     TRY_CAST(key_mlbam AS INTEGER) AS mlbam,
-    NULLIF(CAST(key_bbref AS VARCHAR), '') AS bbref,
-    NULLIF(CAST(key_retro AS VARCHAR), '') AS retro,
-    NULLIF(CAST(key_fangraphs AS VARCHAR), '') AS fangraphs,
+    NULLIF(key_bbref, '') AS bbref,
+    NULLIF(key_retro, '') AS retro,
+    NULLIF(key_fangraphs, '') AS fangraphs,
     name_first || ' ' || name_last AS name,
     TRY_CAST(mlb_played_first AS INTEGER) AS first_year,
     TRY_CAST(mlb_played_last AS INTEGER) AS last_year
-  FROM read_csv_auto([${list}], header = true, union_by_name = true)
+  FROM read_csv_auto([${list}], header = true, union_by_name = true, all_varchar = true)
   WHERE TRY_CAST(key_mlbam AS INTEGER) IS NOT NULL
     AND mlb_played_first IS NOT NULL
-  QUALIFY row_number() OVER (PARTITION BY key_mlbam ORDER BY key_bbref) = 1
+  QUALIFY row_number() OVER (PARTITION BY key_mlbam ORDER BY key_bbref NULLS LAST, key_retro NULLS LAST, key_fangraphs NULLS LAST, key_person) = 1
 ) TO '${out}' (FORMAT PARQUET)`);
 
 const n = (await db.all(`SELECT count(*) AS n FROM read_parquet('${out}')`))[0];
