@@ -90,15 +90,22 @@ function check(label, ok, detail) {
   // player (e.g. a two-way player's one-inning pitching line) must be
   // attributed once, to his real club — not once per club that fetched it.
   // This is the assertion that would have caught both prior rounds of the
-  // split-selection bug; a high-volume duplicate (real PA/IP, not a
-  // trivial cameo) is the unambiguous signature of mis-attribution.
-  const dupes = (await db.all(
-    `SELECT count(*) AS n FROM (
-       SELECT mlbam, role, ipouts, pa FROM read_parquet('${glob}')
-       WHERE year = 2019 AND (coalesce(pa,0) > 20 OR coalesce(ipouts,0) > 30)
-       GROUP BY 1,2,3,4 HAVING count(*) > 1)`))[0];
-  check('no duplicate high-volume player-club rows', Number(dupes.n) === 0,
-    `dupes=${dupes.n}`);
+  // split-selection bug. The key must be the FULL stat line, not just
+  // (ipouts, pa): a player traded mid-season can legitimately record the
+  // same PA count at both clubs while every other column differs, and a
+  // narrower key mistakes that coincidence for the bug. Two rows for the
+  // same player-season are only the bug if every measured column matches.
+  const DUP_COLS = 'year, mlbam, role, pa, ab, h, d2, d3, hr, bb, so, sb, cs, hbp, '
+    + 'ipouts, er, bf, p_h, p_bb, p_so, p_hr';
+  const dupeRows = await db.all(
+    `SELECT ${DUP_COLS} FROM read_parquet('${glob}')
+     WHERE coalesce(pa,0) > 20 OR coalesce(ipouts,0) > 30
+     GROUP BY ALL HAVING count(*) > 1`);
+  const dupeDetail = dupeRows.length
+    ? dupeRows.slice(0, 3).map((r) => `${r.year}/${r.mlbam}/${r.role}`).join(', ')
+    : '';
+  check('no player-season duplicated across clubs (all years)', dupeRows.length === 0,
+    `dupes=${dupeRows.length}${dupeDetail ? ` first: ${dupeDetail}` : ''}`);
 
   // Team totals: the only Tier A source of team-games, so runs/game is exact.
   const rpg = (await db.all(
