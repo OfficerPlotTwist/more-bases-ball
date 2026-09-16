@@ -81,4 +81,27 @@ check('leagueOnlySeasons.totalEmptyClubYears === 111',
 check('leagueOnlySeasons.years["1924"] is non-empty',
   !!(los && Array.isArray(los.years['1924']) && los.years['1924'].length > 0));
 
+// Provenance guard: a `source` string is not free prose. Every distinct
+// source value in coverage.json must be traceable to a URL some builder
+// actually fetches — a plain substring search against that builder's own
+// source text — so a source string can't silently drift from reality across
+// commits the way "Chadwick baseballdatabank" (a dead, 404ing repo) did.
+const SOURCE_URLS = {
+  'MLB Stats API (statsapi.mlb.com)':
+    { builder: 'build-seasons.mjs', needle: 'statsapi.mlb.com' },
+  'Baseball Savant':
+    { builder: 'build-statcast.mjs', needle: 'baseballsavant.mlb.com' },
+};
+const seenSources = new Set(Object.values(s).map((v) => v.source));
+for (const source of seenSources) {
+  const spec = SOURCE_URLS[source];
+  if (!spec) {
+    check(`source "${source}" is known to the provenance guard`, false);
+    continue;
+  }
+  const builderSrc = fs.readFileSync(path.join(ROOT, 'tools', spec.builder), 'utf8');
+  check(`source "${source}" traces to ${spec.needle} in ${spec.builder}`,
+    builderSrc.includes(spec.needle));
+}
+
 process.exit(failures ? 1 : 0);
