@@ -75,12 +75,17 @@ const db = await openDb();
 const stats = {};
 
 for (const p of PROBES) {
-  /* team_totals is team-season grain — it has no mlbam column, so "players"
-   * there counts distinct teams instead. Every other probe is player-season. */
-  const idCol = p.grain === 'team-season' ? 'team' : 'mlbam';
+  /* team_totals is team-season grain — it has no mlbam column, so its
+   * per-entity count is distinct teams, not players. Naming that field
+   * "players" in an artifact intake trusts before charging a fan would be
+   * its own misleading-completeness bug, so the key itself is grain-aware:
+   * player-season stats get players/playerYearsPerSeason, team-season stats
+   * get teams/teamYearsPerSeason, and never both. */
+  const isTeamGrain = p.grain === 'team-season';
+  const idCol = isTeamGrain ? 'team' : 'mlbam';
   const r = (await db.all(
     `SELECT min(year) AS first, max(year) AS last, count(*) AS rows,
-            count(DISTINCT ${idCol}) AS players
+            count(DISTINCT ${idCol}) AS entities
        FROM read_parquet('${p.src}') WHERE ${p.where}`))[0];
   if (r.first == null) {
     console.log(`WARN  ${p.key}: no rows matched — omitted from coverage`);
@@ -89,32 +94,43 @@ for (const p of PROBES) {
   const first = Number(r.first);
   const last = Number(r.last);
   const rows = Number(r.rows);
-  const players = Number(r.players);
-  stats[p.key] = {
-    first, last, rows, source: p.source, grain: p.grain,
-    players,
-    playerYearsPerSeason: Math.round(rows / (last - first + 1)),
-  };
-  if (p.statcast) stats[p.key]._statcastPlayers = players;
+  const entities = Number(r.entities);
+  const perSeason = Math.round(rows / (last - first + 1));
+  stats[p.key] = isTeamGrain
+    ? { first, last, rows, source: p.source, grain: p.grain,
+        teams: entities, teamYearsPerSeason: perSeason }
+    : { first, last, rows, source: p.source, grain: p.grain,
+        players: entities, playerYearsPerSeason: perSeason };
+  if (p.statcast) stats[p.key]._statcastPlayers = entities;
 }
 
 /* populationVsWidest: each Statcast stat's distinct-player count against the
  * widest (most-populous) Statcast column in the whole statcast table — not
- * just the widest among the named coverage stats above. `xwoba` has no
- * coverage entry of its own (it isn't a stat intake asks about), but at a
- * 50-PA gate it is the loosest board Savant publishes, and leaving it out of
- * the "widest" reference is exactly the kind of thing that hides a coverage
- * gap: batted_ball_tracking (ev/la, gated at 50 batted balls) only reads as
- * "roughly half the population" against xwoba, not against sprint_speed. */
+ * just the widest among the named coverage stats above, and not a
+ * hand-maintained column list either. A curated list drifts the same way a
+ * hardcoded year would (it already had: an earlier version of this file
+ * omitted `hp1`, home_to_first's own probed column, while including `xwoba`,
+ * which has no coverage entry at all — invisible today only because hp1 and
+ * spd happen to share a population). Instead, the candidate set is read off
+ * the Parquet schema itself via DESCRIBE, minus the identity columns
+ * (year/mlbam/name), so adding a column to build-statcast.mjs automatically
+ * enters it into the comparison. `xwoba` has no coverage entry of its own
+ * (it isn't a stat intake asks about) but at a 50-PA gate it is the loosest
+ * board Savant publishes; leaving it out of "widest" is exactly what hid
+ * that batted_ball_tracking (ev/la, gated at 50 batted balls) reads as
+ * "roughly half the population" only against xwoba, not against sprint_speed. */
 const statcastKeys = Object.keys(stats).filter((k) => PROBES.find((p) => p.key === k)?.statcast);
 if (statcastKeys.length) {
+  const IDENTITY_COLS = new Set(['year', 'mlbam', 'name']);
+  const schema = await db.all(`DESCRIBE SELECT * FROM read_parquet('${STATCAST}')`);
+  const candidateCols = schema
+    .map((row) => row.column_name)
+    .filter((col) => !IDENTITY_COLS.has(col));
+
   const wideRow = (await db.all(
-    `SELECT count(DISTINCT mlbam) FILTER (WHERE spd IS NOT NULL) AS spd,
-            count(DISTINCT mlbam) FILTER (WHERE xwoba IS NOT NULL) AS xwoba,
-            count(DISTINCT mlbam) FILTER (WHERE ev IS NOT NULL) AS ev,
-            count(DISTINCT mlbam) FILTER (WHERE oaa IS NOT NULL) AS oaa,
-            count(DISTINCT mlbam) FILTER (WHERE arm IS NOT NULL) AS arm,
-            count(DISTINCT mlbam) FILTER (WHERE bat_speed IS NOT NULL) AS bat_speed
+    `SELECT ${candidateCols
+      .map((col) => `count(DISTINCT mlbam) FILTER (WHERE ${col} IS NOT NULL) AS ${col}`)
+      .join(',\n            ')}
        FROM read_parquet('${STATCAST}')`))[0];
   const widest = Math.max(...Object.values(wideRow).map(Number));
   for (const k of statcastKeys) {
@@ -150,7 +166,8 @@ const out = {
 fs.writeFileSync(path.join(DATA, 'coverage.json'), JSON.stringify(out, null, 2) + '\n');
 
 for (const [k, v] of Object.entries(stats)) {
+  const entityLabel = v.teams != null ? `${v.teams} teams` : `${v.players} players`;
   console.log(`${k.padEnd(22)} ${v.first}–${v.last}  ${v.rows} rows  `
-    + `${v.players} players${v.populationVsWidest != null ? `  vsWidest:${v.populationVsWidest}` : ''}`);
+    + `${entityLabel}${v.populationVsWidest != null ? `  vsWidest:${v.populationVsWidest}` : ''}`);
 }
 await db.close();

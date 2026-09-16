@@ -67,6 +67,12 @@ check('sprint_speed.populationVsWidest > 0.5 (measured 0.57, not the '
   s.sprint_speed.populationVsWidest > 0.5,
   String(s.sprint_speed.populationVsWidest));
 
+// team_totals is team-season grain: it must report teams, not players, and
+// must never claim a "players" count for an entity that is a franchise code.
+check('team_totals.teams === 163', s.team_totals.teams === 163,
+  String(s.team_totals.teams));
+check('team_totals.players is undefined', s.team_totals.players === undefined);
+
 // Empty club-years (Negro Leagues, Federal League, pre-debut franchises) are
 // a first-class coverage fact, not a silent gap.
 const los = cov.leagueOnlySeasons;
