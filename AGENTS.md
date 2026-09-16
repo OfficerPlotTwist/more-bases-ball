@@ -77,3 +77,52 @@ were vanishing early, 0.54s on average.
 A player is four materials (body, head, contact shadow, name sprite). Fade
 them together via `setPlayerOpacity` — fading `userData.mat` alone leaves a
 solid head floating over a solid shadow.
+
+## Data spine
+
+`data.js` is the small, committed slice the browser sim loads. The **spine**
+under `data/` is the full population the service simulates against: every
+player 1876-2025, both roles, plus Statcast tracking from 2015. It is
+generated and gitignored.
+
+- **Sources.** Season lines and team totals come from the MLB Stats API
+  (`statsapi.mlb.com`), not Lahman/Baseball Databank — that mirror 404s, it
+  is gone, and repeating the old claim would send the next person fetching a
+  dead repo. Statcast tracking is six Baseball Savant leaderboards, each with
+  its own era start. The player id crosswalk is the Chadwick Register. All
+  free, none key-gated.
+- Build it: `node tools/build-spine.mjs`. Builders run in dependency order
+  and share an HTTP cache at `data/.cache`, so a rebuild is cheap (warm
+  ~30s; cold, a few minutes; `MBB_CACHE_REFRESH=1` forces refetch).
+- Query it through `tools/lib/spine.mjs` only. Nothing else reads Parquet —
+  that is what keeps the storage layout swappable.
+- Team codes are the **modern** MLB abbreviations (`LAD`, `NYY`), not
+  Lahman's historical forms — the source is the Stats API, which never used
+  `LAN`/`NYA`. There are 163 distinct codes across history including
+  Federal League forms like `BAL-F`; do not assume the set is 30.
+- **Three gates guard a customer-facing number, and all three have to hold
+  for `coverage.json` to mean anything:**
+  - `build-seasons.mjs` writes `data/_build.json` with `complete: true` only
+    when the year loop finished, no club fetch failed, and every year
+    fetched the number of clubs MLB lists. A partial build never exits 0.
+  - `build-coverage.mjs` refuses to run unless `complete === true`.
+    `coverage.json` is what intake reads before charging a fan for a rule;
+    measuring a truncated spine and reporting it as whole is the worst
+    failure mode this project has, worse than refusing to answer at all.
+  - `openSpine()` refuses for the same reason, with `{ allowIncomplete:
+    true }` as a debugging-only escape.
+- `spine.mjs` validates every query parameter and throws rather than
+  interpolating it raw: `year` must be an integer, `team` must match
+  `/^[A-Z]{2,4}(-[A-Z])?$/`, `role` must be `bat` or `pit`. These parameters
+  originate in a customer request in the product this serves and land
+  straight in SQL — a `year: '2024 OR 1=1'` and a `team: "LAD' OR '1'='1"`
+  payload both defeated the filters before the guards went in;
+  `tests/spine-query.test.js` carries both as regressions.
+- `coverage.json` also carries `leagueOnlySeasons` — 111 club-seasons that
+  have team totals but no player rows, overwhelmingly Negro Leagues clubs
+  1920-1948 (MLB recognised them as major leagues in 2020, so they appear in
+  the team list while player-level data stays thin) plus the 1914-15
+  Federal League. Surface that on a results page touching those years; it is
+  provenance, not an apology.
+- Spine tests skip cleanly when `data/` is absent, so a fresh clone with no
+  network still shows the original twelve green.

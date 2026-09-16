@@ -1,8 +1,11 @@
 # moreBasesBall
 
-Baseball simulation driven by real 2024 MLB batting lines — on a field with
-however many bases you want (1–7). The diamond becomes a triangle, pentagon,
-hexagon… and the run environment changes with it.
+Baseball simulation driven by real MLB batting lines — every club, five
+seasons (2021–2025) — on a field with however many bases you want (1–7). The
+diamond becomes a triangle, pentagon, hexagon… and the run environment changes
+with it. Runners are real too: each batter carries his own Statcast sprint
+speed and home-to-first time, and the clock the engine decides plays on is
+built from them.
 
 ## Run it
 
@@ -12,7 +15,8 @@ Open `index.html` in a browser. No build step, no dependencies.
 
 ## What you can do
 
-1. Pick two of six teams (Dodgers, Yankees, Phillies, Braves, Astros, Mets — 2024 lineups).
+1. Pick a **season** (2021–2025) and two of all 30 clubs. Each club fields the
+   nine batters who took the most plate appearances that year.
 2. Set the house rules: bases 1–7, innings 1–12, outs per inning 1–5.
 3. **Play ball** — one animated game with play-by-play, scoreboard, and runners on the morphing field. Flip the field to **3D** to watch each play run in real time (below).
 4. **Sim 500 games** — win rates, run environment, extremes for the matchup.
@@ -99,6 +103,40 @@ spacing the average ball is run down in 2.0 s, against 2.4 s at 150 ft and
 
 Classic N-gon games are the exception: their outcomes still come from
 `sim.js`, so fielders there are shown but do not change results — see below.
+
+## Runner speed
+
+Nobody runs at a flat speed from a standing start, and two measured numbers
+per batter say so. `data.js` carries, for every hitter in every season:
+
+- **`spd`** — his Statcast sprint speed, ft/s, peak over his fastest
+  one-second window. League range is about 22.8–30.5; the median is ~27.4.
+- **`hp1`** — his average home-to-first time over 90 ft. League median ~4.44s.
+
+A flat 27 ft/s covers 90 ft in 3.33s, but the league actually takes ~4.44s out
+of the box, because the swing, the turn and the acceleration from rest are all
+in there. That gap *is* the start-up cost, so the model reads it straight off
+the data rather than guessing at it:
+
+```
+startCost = hp1 - 90 / spd            (~1.15s at the league median)
+legTime   = distance / spd + startCost
+```
+
+Every player's own home-to-first time is therefore reproduced exactly, by
+construction — `tests/batters.test.js` asserts it for all 270 batters in a
+season, and asserts the animation runs on the same clock the engine decided
+the play on.
+
+Leaving a base is not the same as leaving the box: there is no swing to
+finish, and a runner takes a lead and is already leaning. Statcast does not
+publish base-to-base times, so `LEAD_FT` (12 ft) and `BASE_START` (45% of the
+start-up cost) in `graphsim.js` are **model, not measurement** — they are the
+honest place to tune, and they are named so you can find them.
+
+Correcting the flat 27 ft/s cost the offense about 10%: on the starter ring
+scoring fell from 8.5 to 7.6 runs per team per game, because runners who used
+to beat throws by a step no longer do.
 
 ## Runners
 
@@ -192,9 +230,9 @@ pitch's `t+0.42s` offset.
 ### Distance physics & animated plays
 
 Edge lengths are real feet (canvas scale 1.2 px/ft), and time decides plays:
-runners move at ~27 ft/s (Statcast average sprint speed), throws travel at
-~135 ft/s (+ transfer time), batted balls land at a contact point fanned out
-from the batting plate.
+runners move at their own measured pace (see **Runner speed** below), throws
+travel at ~135 ft/s (+ transfer time), batted balls land at a contact point
+fanned out from the batting plate.
 
 - **Stretches** — a runner takes an extra base only when the next leg is
   short; long edges play station-to-station.
@@ -277,7 +315,10 @@ shorter routes score more.
 
 ## Files
 
-- `data.js` — six teams × nine batters, real 2024 season lines
+- `data.js` — 30 clubs × 5 seasons × nine batters: real season lines plus each
+  batter's Statcast sprint speed and home-to-first time (generated)
+- `tools/build-data.mjs` — rebuilds `data.js` from statsapi.mlb.com and
+  Baseball Savant; joins the two on MLBAM player id
 - `sim.js` — classic N-gon engine (pure, also loads in Node)
 - `layout.js` — custom-field graph model: nodes, directed edges, path finding
 - `fielders.js` — the defensive alignment: who is on the field and where
@@ -289,3 +330,37 @@ shorter routes score more.
 - `ui.js` — field rendering, playback, bulk sims
 - `vendor/` — three.js r169, vendored so there is still no build step
 - `index.html`, `style.css` — the ballpark at night
+
+### Data spine
+
+`data.js` above is the small, committed slice the browser sim loads. The
+full population the service simulates against lives under `data/`,
+generated on demand and gitignored:
+
+```
+data/
+  seasons/{year}.parquet    150 files, 1876-2025, 105,833 bat + 53,719 pit
+  league/{year}.parquet     150 files, team-season totals incl. R and G
+  statcast/{year}.parquet    11 files, 2015-2025
+  players.parquet            23,666 players, id crosswalk
+  coverage.json              measured coverage manifest
+  _build.json                build manifest: complete flag, per-year clubsEmpty
+  .cache/                    sha1-keyed HTTP cache, no TTL
+```
+
+Season lines and team totals come from the MLB Stats API
+(`statsapi.mlb.com`); Statcast tracking from Baseball Savant leaderboards
+(2015+); the player id crosswalk from the Chadwick Register. All free, none
+key-gated.
+
+One command builds all of it: `node tools/build-spine.mjs`. Cold, a few
+minutes; warm (cache present), about 30 seconds.
+
+`data/coverage.json` is measured from the written Parquet, never
+hand-maintained, and is a product surface: it records each stat's first and
+last covered year, row and player counts, and (for Statcast columns) a
+`populationVsWidest` ratio, because Statcast columns do not share a
+population — bat tracking covers 0.07 of what the widest board does, arm
+strength 0.28. It also lists `leagueOnlySeasons`, club-seasons with team
+totals but no player rows (mostly Negro Leagues clubs 1920-1948 and the
+1914-15 Federal League) — a results page touching those years should say so.
