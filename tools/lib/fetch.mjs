@@ -27,16 +27,27 @@ const retry = async (url, as, tries = 3) => {
   throw new Error('failed ' + url);
 };
 
-export const getText = async (url) => {
+let hits = 0;
+let misses = 0;
+
+export const cacheStats = () => ({ hits, misses });
+export const resetCacheStats = () => { hits = 0; misses = 0; };
+
+export const getText = async (url, validate) => {
   const p = cachePath(url);
-  if (fs.existsSync(p)) return fs.readFileSync(p, 'utf8');
+  if (process.env.MBB_CACHE_REFRESH !== '1' && fs.existsSync(p)) {
+    hits++;
+    return fs.readFileSync(p, 'utf8');
+  }
+  misses++;
   const body = await retry(url, 'text');
+  if (validate) validate(body);   // throws BEFORE anything reaches the cache
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, body);
   return body;
 };
 
-export const getJson = async (url) => JSON.parse(await getText(url));
+export const getJson = async (url) => JSON.parse(await getText(url, JSON.parse));
 
 export const pool = async (items, n, fn) => {
   const out = [];
