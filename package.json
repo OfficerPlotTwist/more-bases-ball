@@ -1,0 +1,15 @@
+{
+  "name": "more-bases-ball",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Baseball rule-change simulator and its data spine.",
+  "scripts": {
+    "test": "node tools/run-tests.mjs",
+    "build:spine": "node tools/build-spine.mjs",
+    "build:data": "node tools/build-data.mjs"
+  },
+  "dependencies": {
+    "@duckdb/node-api": "1.5.5-r.5"
+  }
+}
