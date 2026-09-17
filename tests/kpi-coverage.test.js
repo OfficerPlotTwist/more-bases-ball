@@ -97,11 +97,12 @@ function check(label, ok, detail) {
   check('coverage.json carries a kpis section', !!list);
   check('coverage reports all eleven spec KPIs',
     SPEC_KPIS.every((k) => list[k]), SPEC_KPIS.filter((k) => !list[k]).join(', '));
-  check('coverage certifies ten of eleven',
-    c.kpis.certified === 10 && c.kpis.total === 11,
+  check('coverage certifies all eleven',
+    c.kpis.certified === 11 && c.kpis.total === 11,
     `${c.kpis.certified}/${c.kpis.total}`);
 
   const available = SPEC_KPIS.filter((k) => list[k].available);
+  const latestOf = (k) => list[k].latestSeason.value;
   check('every available KPI has a finite sigma',
     available.every((k) => Number.isFinite(list[k].sigma)),
     available.filter((k) => !Number.isFinite(list[k].sigma)).join(', '));
@@ -111,19 +112,42 @@ function check(label, ok, detail) {
   check('first is never after last',
     available.every((k) => list[k].first <= list[k].last));
 
-  // run_distribution_variance is the one the spine genuinely cannot answer.
-  // It must be PRESENT and marked, never omitted: an absent key reads as
-  // "not a KPI", which is a different and wrong statement from "we have no
-  // game-level data" — and only the second one tells the next person what to
-  // build. This is the rule unconsumedColumns already follows for bbref.
+  // run_distribution_variance is the only KPI below season grain: it reads
+  // data/games/ at team-game grain, because a variance cannot be reconstructed
+  // from season totals. Everything else reads the league table.
   const rdv = list.run_distribution_variance;
-  check('run_distribution_variance is present and marked unavailable',
-    rdv && rdv.available === false, JSON.stringify(rdv && rdv.available));
-  check('the unavailable KPI says what would unblock it',
-    !!(rdv && rdv.blockedBy && /game-level/.test(rdv.blockedBy)),
-    rdv && rdv.blockedBy);
-  check('the unavailable KPI carries no sigma to mistake for a yardstick',
-    rdv && rdv.sigma === undefined);
+  check('run_distribution_variance reads the games dataset at team-game grain',
+    rdv.dataset === 'games' && rdv.grain === 'team-game',
+    `${rdv.dataset}/${rdv.grain}`);
+  check('every other KPI reads the league table at team-season grain',
+    SPEC_KPIS.filter((k) => k !== 'run_distribution_variance')
+      .every((k) => list[k].dataset === 'league' && list[k].grain === 'team-season'));
+
+  // The schedule endpoint returns totalGames: 0 for 1876-1900 — the season
+  // lines for those years exist, the game log does not. That source boundary
+  // is why this KPI starts later than the other ten, and it must be reported
+  // rather than smoothed over.
+  check('run_distribution_variance starts at 1901, the schedule endpoint boundary',
+    rdv.first === 1901, String(rdv.first));
+  check('run_distribution_variance has no gaps inside its range',
+    rdv.gapYears === 0, String(rdv.gapYears));
+
+  // Sanity: baseball run scoring is over-dispersed — per-team-game variance
+  // runs a bit over twice the mean. If the expression were var_samp over the
+  // wrong grain, or a variance of season totals, this ratio would be far off.
+  const vmr = rdv.latestSeason.value / latestOf('runs_per_game');
+  check('variance-to-mean ratio is in the 1.8-3.0 band (run scoring is over-dispersed)',
+    vmr > 1.8 && vmr < 3.0, String(Number(vmr.toPrecision(3))));
+
+  // An in-progress season is a partial-season value and must never enter the
+  // series sigma is computed from — one partial year corrupts two deltas.
+  const ip = c.kpis.inProgressSeasons || [];
+  check('no in-progress season appears as a game-grain KPI last year',
+    !ip.includes(rdv.last), `inProgress=[${ip}] last=${rdv.last}`);
+  if (ip.length) {
+    check('in-progress seasons are named, not silently dropped',
+      typeof c.kpis.inProgressNote === 'string' && c.kpis.inProgressNote.length > 0);
+  }
 
   // Era starts are measured, not assumed. The Stats API omits a stat for the
   // years nobody recorded it, and build-seasons.mjs preserves that as NULL —
@@ -148,7 +172,7 @@ function check(label, ok, detail) {
 
   // Sanity against real baseball: if the expressions are wrong, these are the
   // numbers that say so. 2025 ran roughly 4.4 R/G on a .245/.315/.404 line.
-  const latest = (k) => list[k].latestSeason.value;
+  const latest = latestOf;
   check('2025 runs/game is in the 3.5-5.5 band',
     latest('runs_per_game') > 3.5 && latest('runs_per_game') < 5.5,
     String(latest('runs_per_game')));
@@ -169,8 +193,11 @@ function check(label, ok, detail) {
     String(latest('strikeout_rate')));
 
   // Provenance, the standard the rest of coverage.json is held to.
-  check('every KPI names its source and dataset',
-    SPEC_KPIS.every((k) => list[k].source && list[k].dataset === 'league'));
+  // Superseded by the per-dataset check above — here it only asserts that no
+  // KPI is published without provenance at all.
+  check('every KPI names its source and a known dataset',
+    SPEC_KPIS.every((k) => list[k].source && ['league', 'games'].includes(list[k].dataset)),
+    SPEC_KPIS.filter((k) => !list[k].source || !['league', 'games'].includes(list[k].dataset)).join(', '));
   check('the sigma definition is stated, not implied',
     /stdev of the year-over-year change/.test(c.kpis.sigmaDefinition || ''));
 

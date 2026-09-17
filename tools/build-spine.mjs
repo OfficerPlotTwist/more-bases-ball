@@ -13,8 +13,12 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+/* build-games.mjs is independent of the other three — it reads the schedule
+ * endpoint and joins nothing — but it must precede build-coverage.mjs, which
+ * measures run_distribution_variance from data/games/ and reports that KPI as
+ * unavailable if the dataset is not there. */
 const STEPS = ['build-players.mjs', 'build-seasons.mjs',
-  'build-statcast.mjs', 'build-coverage.mjs'];
+  'build-statcast.mjs', 'build-games.mjs', 'build-coverage.mjs'];
 
 for (const s of STEPS) {
   console.log(`\n=== ${s} ===`);

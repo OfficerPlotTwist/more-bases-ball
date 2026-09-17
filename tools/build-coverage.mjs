@@ -38,11 +38,13 @@ const DATASET_SOURCE = {
   seasons:  { label: 'MLB Stats API (statsapi.mlb.com)', builder: 'build-seasons.mjs',  needle: 'statsapi.mlb.com' },
   league:   { label: 'MLB Stats API (statsapi.mlb.com)', builder: 'build-seasons.mjs',  needle: 'statsapi.mlb.com' },
   statcast: { label: 'Baseball Savant',                  builder: 'build-statcast.mjs', needle: 'baseballsavant.mlb.com' },
+  games:    { label: 'MLB Stats API (statsapi.mlb.com)', builder: 'build-games.mjs',    needle: 'statsapi.mlb.com' },
 };
 const DATASET_GLOB = {
   seasons: g('seasons', '*.parquet'),
   league: g('league', '*.parquet'),
   statcast: g('statcast', '*.parquet'),
+  games: g('games', '*.parquet'),
 };
 const STATCAST = DATASET_GLOB.statcast;
 
@@ -209,22 +211,67 @@ if (statcastKeys.length) {
  * and the middle of a KPI's range can still be hollow; a fan reading
  * "1954-2025" should not have to assume every year inside it is there. */
 const MODERN = 1950;   // sigma's floor: rule changes before this are not comparable
+
+/* data/games/ is the one OPTIONAL dataset in the spine: ten KPIs never touch
+ * it, so a spine built without it is not broken, it is narrower. Its absence
+ * therefore demotes ONE KPI to available:false rather than failing the whole
+ * measurement — the opposite of the _build.json gate above, which refuses
+ * everything, because there a partial spine makes every number suspect.
+ *
+ * Its own manifest must say complete:true for the same reason _build.json
+ * must: a games build that lost seasons would silently narrow the variance
+ * series, and a sigma computed over the years that happened to survive is a
+ * yardstick nobody can interpret. */
+const gamesManifestPath = path.join(DATA, 'games', '_games.json');
+let gamesReady = false;
+let gamesUnready = 'data/games/ is not built — run `node tools/build-games.mjs`';
+/* Seasons still being played. Their variance is computed over a partial
+ * season: real, but not comparable to a full one, and sigma is a series of
+ * year-over-year deltas, so one partial year corrupts two of them. They are
+ * excluded from the series and NAMED in the artifact, never silently dropped —
+ * a reader who sees `last: 2025` in September 2026 has to be told why. */
+let inProgressSeasons = [];
+if (fs.existsSync(gamesManifestPath)) {
+  const gm = JSON.parse(fs.readFileSync(gamesManifestPath, 'utf8'));
+  gamesReady = gm.complete === true;
+  inProgressSeasons = (gm.years || []).filter((y) => y.inProgress).map((y) => y.year);
+  if (!gamesReady) {
+    gamesUnready = 'data/games/_games.json reports complete=false '
+      + `(${(gm.failures || []).length} failed seasons) — re-run \`node tools/build-games.mjs\``;
+  }
+}
+
 const kpiList = {};
 let certified = 0;
 for (const [key, kpi] of Object.entries(KPIS)) {
+  /* A KPI whose dataset was never built is reported unavailable WITH the
+   * command that fixes it — the same contract the hard-blocked version of
+   * this KPI carried before data/games/ existed. */
+  if (kpi.dataset === 'games' && !gamesReady) {
+    kpiList[key] = {
+      available: false, requires: kpi.requires, unit: kpi.unit,
+      reason: gamesUnready,
+      blockedBy: 'node tools/build-games.mjs',
+      source: DATASET_SOURCE.games.label, dataset: 'games',
+    };
+    console.log(`${key.padEnd(26)} UNAVAILABLE — ${gamesUnready}`);
+    continue;
+  }
   if (kpi.available === false) {
     kpiList[key] = {
       available: false, requires: kpi.requires, unit: kpi.unit,
       reason: kpi.reason, blockedBy: kpi.blockedBy,
-      source: DATASET_SOURCE.league.label, dataset: 'league',
+      source: DATASET_SOURCE[kpi.dataset].label, dataset: kpi.dataset,
     };
     console.log(`${key.padEnd(26)} UNAVAILABLE — ${kpi.blockedBy}`);
     continue;
   }
   const present = kpi.requires.map((c) => `${c} IS NOT NULL`).join(' AND ');
+  const exclude = kpi.dataset === 'games' && inProgressSeasons.length
+    ? ` AND year NOT IN (${inProgressSeasons.join(', ')})` : '';
   const series = await db.all(
-    `SELECT year, ${kpi.expr} AS v FROM read_parquet('${DATASET_GLOB.league}')
-      WHERE ${present}
+    `SELECT year, ${kpi.expr} AS v FROM read_parquet('${DATASET_GLOB[kpi.dataset]}')
+      WHERE ${present}${exclude}
       GROUP BY year HAVING ${kpi.expr} IS NOT NULL ORDER BY year`);
   if (!series.length) {
     /* A KPI whose columns exist in the schema but are empty everywhere must
@@ -234,8 +281,8 @@ for (const [key, kpi] of Object.entries(KPIS)) {
     kpiList[key] = {
       available: false, requires: kpi.requires, unit: kpi.unit,
       reason: 'required columns are present in the schema but NULL in every season',
-      blockedBy: 'rebuild the spine — `node tools/build-seasons.mjs`',
-      source: DATASET_SOURCE.league.label, dataset: 'league',
+      blockedBy: `rebuild the spine — \`node tools/build-${kpi.dataset === 'games' ? 'games' : 'seasons'}.mjs\``,
+      source: DATASET_SOURCE[kpi.dataset].label, dataset: kpi.dataset,
     };
     console.log(`${key.padEnd(26)} UNAVAILABLE — no populated seasons`);
     continue;
@@ -258,7 +305,8 @@ for (const [key, kpi] of Object.entries(KPIS)) {
     available: true, first, last, seasons: years.length,
     gapYears: missingYears.length, missingYears,
     requires: kpi.requires, unit: kpi.unit,
-    source: DATASET_SOURCE.league.label, dataset: 'league', grain: 'team-season',
+    source: DATASET_SOURCE[kpi.dataset].label, dataset: kpi.dataset,
+    grain: kpi.dataset === 'games' ? 'team-game' : 'team-season',
     sigma: sigma == null ? null : Number(sigma.toPrecision(4)),
     sigmaWindow: { from: Math.max(first, MODERN), to: last, seasons: modern.length },
     latestSeason: { year: last, value: Number(latest.toPrecision(5)) },
@@ -298,6 +346,12 @@ const out = {
       + 'is not a comparable yardstick for a modern rule.',
     certified,
     total: Object.keys(KPIS).length,
+    inProgressSeasons,
+    inProgressNote: inProgressSeasons.length
+      ? 'Excluded from every game-grain KPI series: a season still being played '
+        + 'yields a partial-season value that is not comparable to a full one, '
+        + 'and sigma is a series of year-over-year deltas.'
+      : undefined,
     list: kpiList,
   },
   unconsumedColumns: {

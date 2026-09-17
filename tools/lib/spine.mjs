@@ -21,12 +21,17 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
  * NULL), so both the coverage probe and the sigma query filter on it, and each
  * KPI reports its own real first year instead of the league table's 1876.
  *
- * `available: false` is a first-class answer. run_distribution_variance is a
- * property of the per-GAME run distribution and the spine holds team-SEASON
- * totals; there is no expression over these columns that yields it. Reporting
- * it as a KPI that is present-but-unavailable is the point — intake can refuse
- * a rule whose diagnostic cannot be computed, which it could not do if the KPI
- * were simply absent from the table. */
+ * `dataset` says which Parquet the expression runs against. Ten KPIs are rates
+ * over season totals and read `league`; run_distribution_variance is a property
+ * of the per-GAME distribution and reads `games`, which no season total can
+ * reconstruct.
+ *
+ * `available: false` remains a first-class answer even though nothing sets it
+ * today: data/games/ is the spine's one OPTIONAL dataset, so a spine built
+ * without it reports run_distribution_variance as unavailable WITH the command
+ * that fixes it, rather than omitting the KPI. An absent key reads as "not a
+ * KPI", which is a different and wrong statement from "we have no data for
+ * it" — and only the second tells the next person what to build. */
 export const KPIS = {
   runs_per_game: {
     expr: 'sum(r) * 1.0 / sum(g)', requires: ['r', 'g'], unit: 'runs/game' },
@@ -56,16 +61,26 @@ export const KPIS = {
     unit: 'rate' },
   double_play_rate: {
     expr: 'sum(gidp) * 1.0 / sum(pa)', requires: ['gidp', 'pa'], unit: 'rate' },
+  /* The one KPI that is not a rate over season totals. Variance is a property
+   * of the per-game distribution, so it reads data/games/ (team-game grain,
+   * built by tools/build-games.mjs) rather than the league table.
+   *
+   * var_pop, not var_samp: a season's team-games are the whole population of
+   * that season's games, not a sample drawn from a larger one. The two differ
+   * by n/(n-1) — about 0.02% at 4860 team-games, which is invisible in the
+   * value and is exactly why picking the wrong one would never be noticed.
+   *
+   * Its coverage starts at 1901: the schedule endpoint returns totalGames: 0
+   * for 1876-1900, so the season lines for those years exist and the game log
+   * does not. The other ten KPIs reach further back; this one says so. */
   run_distribution_variance: {
-    available: false,
-    requires: ['per-game run totals'],
-    unit: 'runs^2',
-    reason: 'the spine holds team-SEASON totals; run-distribution variance is a '
-      + 'property of the per-game distribution, which no column here carries',
-    blockedBy: 'needs a game-level builder over the Stats API schedule/linescore '
-      + 'endpoints — a new dataset, not a new column',
-  },
+    expr: 'var_pop(runs)', requires: ['runs'], unit: 'runs^2', dataset: 'games' },
 };
+
+/* Ten KPIs are rates over season totals; only run_distribution_variance needs
+ * game grain. Defaulting here rather than repeating `dataset: 'league'` ten
+ * times keeps the table readable and makes the exception visible. */
+for (const kpi of Object.values(KPIS)) if (!kpi.dataset) kpi.dataset = 'league';
 
 /* Pure: the effect-size yardstick itself — the standard deviation of the
  * season-to-season CHANGE in a series, not of the series. Exported because
@@ -206,6 +221,11 @@ export async function openSpine(dataDir = path.join(ROOT, 'data'), opts = {}) {
   const seasons = sqlPath(path.join(dataDir, 'seasons', '*.parquet'));
   const statcast = sqlPath(path.join(dataDir, 'statcast', '*.parquet'));
   const league = sqlPath(path.join(dataDir, 'league', '*.parquet'));
+  const games = sqlPath(path.join(dataDir, 'games', '*.parquet'));
+  /* Which Parquet glob a KPI's expression runs against. Ten KPIs are rates
+   * over season totals and read `league`; run_distribution_variance is a
+   * property of the per-game distribution and reads `games`. */
+  const KPI_GLOB = { league, games };
 
   return {
     /* coverage.json and the parquet it measured must come from the SAME build.
@@ -293,8 +313,16 @@ export async function openSpine(dataDir = path.join(ROOT, 'data'), opts = {}) {
        * NULL propagate: sum() over a column that is NULL for the whole season
        * yields NULL, and one NULL year would blank two consecutive deltas. */
       const present = kpi.requires.map((c) => `${c} IS NOT NULL`).join(' AND ');
+      const src = KPI_GLOB[kpi.dataset];
+      /* A KPI can name a dataset this spine was built without — games/ is
+       * optional, seasons/ is not. Say which builder is missing rather than
+       * letting read_parquet fail on a glob that matches nothing. */
+      if (!fs.existsSync(path.join(dataDir, kpi.dataset))) {
+        throw new Error(`sigma: ${stat} reads data/${kpi.dataset}/, which is not built — `
+          + `run \`node tools/build-${kpi.dataset === 'games' ? 'games' : 'seasons'}.mjs\``);
+      }
       const rows = await db.all(
-        `SELECT year, ${kpi.expr} AS v FROM read_parquet('${league}')
+        `SELECT year, ${kpi.expr} AS v FROM read_parquet('${src}')
           WHERE year BETWEEN ${from} AND ${to} AND ${present}
           GROUP BY year HAVING ${kpi.expr} IS NOT NULL ORDER BY year`);
       return stdevOfDeltas(rows.map((r) => Number(r.v)));

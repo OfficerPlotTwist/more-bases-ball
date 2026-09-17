@@ -59,4 +59,10 @@ git diff <range>            # e.g. git diff 348405c..f871a6b
 
 The spine is built and its three gates hold (`_build.json complete`,
 `build-coverage.mjs` refusal, `openSpine()` refusal — see `AGENTS.md`).
-The follow-on work is KPI coverage: see `kpi-coverage.md`.
+Follow-on work, newest last:
+
+- `kpi-coverage.md` — scoping `coverage.json` to the spec's full KPI list
+  (3 of 11 certified → 10).
+- `game-level-dataset.md` — `data/games/`, the team-game dataset that closed
+  the eleventh (10 → **11 of 11**), and the three structural bugs its tests
+  caught in a dataset that already looked right.

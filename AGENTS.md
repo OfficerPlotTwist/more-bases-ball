@@ -37,7 +37,7 @@ box score is byte-identical before and after.
 ## Tests
 
 `node tools/run-tests.mjs` (portable) or
-`for t in tests/*.test.js; do node $t; done` — all 21 files must pass.
+`for t in tests/*.test.js; do node $t; done` — all 22 files must pass.
 `tests/defense-stress.test.js` is the one to run after touching anything in
 `fielders.js` or `resolveBallOut`: it covers the awkward custom layouts.
 
@@ -161,11 +161,38 @@ generated and gitignored.
   DIAGNOSTIC can be COMPUTED — for which years, with what gaps, and against what
   sigma. `season_batting` reaches 1876; on-base percentage starts at 1954,
   because nobody recorded a sacrifice fly before then. All 11 spec KPIs are
-  reported; 10 are computable and `run_distribution_variance` is carried with
-  `available: false` because it needs per-GAME runs and the spine holds
-  team-SEASON totals. Never omit an unavailable KPI — an absent key reads as
-  "not a KPI", which is a different and wrong statement from "we have no data
-  for it", and only the second tells the next person what to build.
+  reported and all 11 are computable. Never omit an unavailable KPI — an absent
+  key reads as "not a KPI", which is a different and wrong statement from "we
+  have no data for it", and only the second tells the next person what to build.
+- **`data/games/` is the spine's one OPTIONAL dataset**, and the only one below
+  season grain: team-game rows (two per game) built by `tools/build-games.mjs`,
+  1901-present, ~451k rows. It exists for exactly one KPI —
+  `run_distribution_variance`, which is a property of the per-game distribution
+  and cannot be reconstructed from season totals. Its absence demotes that ONE
+  KPI to `available: false` with the build command attached; it never fails the
+  whole measurement, which is the opposite of the `_build.json` gate, because
+  there a partial spine makes every number suspect.
+  - Coverage starts at **1901**: the schedule endpoint returns `totalGames: 0`
+    for 1876-1900. Season lines for those years exist; the game log does not.
+  - **Dedupe on `gamePk`.** A suspended game is listed under both the date it
+    started and the date it resumed, and `totalGames` counts it twice — so it
+    arrived as four rows under one `gamePk` and was counted twice in the
+    distribution. The manifest keeps the raw `gamesFetched` (a transport check
+    against `totalGames`) separate from `gamesUnique`.
+  - **Negro Leagues clubs are in the schedule but not in `/teams?season=Y`**
+    for 1931/1934/1939, so `abbrForId()` falls back to `/teams/{id}`. Without
+    it, 77 rows landed with `team: NULL` and one side of 77 real games vanished
+    from the run distribution. This is the game-grain face of the same gap
+    `leagueOnlySeasons` reports.
+  - **An in-progress season is excluded from every game-grain KPI series** and
+    named in `kpis.inProgressSeasons`. Its variance is a partial-season value;
+    sigma is a series of year-over-year deltas, so one partial year corrupts
+    two of them. Detected from a scheduled game dated in the future, never from
+    `gamesScored < apiTotalGames` — that cannot tell "not played yet" from
+    "never played", and 1994 and 2020 are the latter.
+  - `var_pop`, not `var_samp`: a season's team-games are the whole population,
+    not a sample. They differ by n/(n-1) — ~0.02% at 4860 team-games, invisible
+    in the value, which is exactly why the wrong one would never be noticed.
 - **KPI definitions live in ONE place**: `KPIS` in `tools/lib/spine.mjs`.
   `sigma()` computes from it and `build-coverage.mjs` measures from it. Two
   copies would let a baked-in sigma and a live `sigma()` disagree, ranking a
