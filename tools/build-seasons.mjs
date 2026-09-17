@@ -3,7 +3,7 @@
  *   node tools/build-seasons.mjs [firstYear] [lastYear]      (default 1876 2025)
  *
  * Source: the MLB Stats API (statsapi.mlb.com) — see
- * .superpowers/sdd/2026-09-15-data-spine/task-3-addendum.md for why this
+ * docs/decisions/2026-09-15-data-spine/task-3-addendum.md for why this
  * replaces the brief's baseballdatabank CSVs (that mirror is dead: 404 on
  * master and main, and every fork is stale).
  *
@@ -339,6 +339,22 @@ for (let year = FIRST; year <= LAST; year++) {
     ab: s.stat.atBats ?? null, h: s.stat.hits ?? null,
     d2: s.stat.doubles ?? null, d3: s.stat.triples ?? null, hr: s.stat.homeRuns ?? null,
     bb: s.stat.baseOnBalls ?? null, so: s.stat.strikeOuts ?? null,
+    /* The six columns the spec's KPI list needs and team totals did not carry:
+     * without them K%/BB% can only be approximated as so/(ab+bb), OBP and the
+     * steal and double-play rates cannot be computed at team-season grain at
+     * all, and coverage.json could certify 3 of 11 KPIs instead of 10.
+     *
+     * They cost no new source and no new request — this is the SAME cached
+     * teams/stats response, which was already carrying them unread.
+     *
+     * `?? null` is load-bearing. The Stats API OMITS a key for eras that never
+     * recorded the stat (no sacFlies before 1954, no caughtStealing before
+     * ~1950, no groundIntoDoublePlay before 1933) rather than returning 0, so
+     * a null lands in Parquet and the coverage probe measures each KPI's real
+     * first year. A 0 default would have advertised OBP back to 1876. */
+    pa: s.stat.plateAppearances ?? null, hbp: s.stat.hitByPitch ?? null,
+    sf: s.stat.sacFlies ?? null, sb: s.stat.stolenBases ?? null,
+    cs: s.stat.caughtStealing ?? null, gidp: s.stat.groundIntoDoublePlay ?? null,
   }));
 
   if (leagueRows.length) {
@@ -351,7 +367,10 @@ for (let year = FIRST; year <= LAST; year++) {
         CAST(lg AS VARCHAR) AS lg, CAST(g AS INTEGER) AS g, CAST(r AS INTEGER) AS r,
         CAST(ra AS INTEGER) AS ra, CAST(ab AS INTEGER) AS ab, CAST(h AS INTEGER) AS h,
         CAST(d2 AS INTEGER) AS d2, CAST(d3 AS INTEGER) AS d3, CAST(hr AS INTEGER) AS hr,
-        CAST(bb AS INTEGER) AS bb, CAST(so AS INTEGER) AS so
+        CAST(bb AS INTEGER) AS bb, CAST(so AS INTEGER) AS so,
+        CAST(pa AS INTEGER) AS pa, CAST(hbp AS INTEGER) AS hbp,
+        CAST(sf AS INTEGER) AS sf, CAST(sb AS INTEGER) AS sb,
+        CAST(cs AS INTEGER) AS cs, CAST(gidp AS INTEGER) AS gidp
       FROM read_json_auto('${src}')) TO '${outFile}' (FORMAT PARQUET)`);
     fs.rmSync(tmpFile);
     leagueYears.push(year);

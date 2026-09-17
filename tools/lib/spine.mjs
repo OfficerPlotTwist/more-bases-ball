@@ -10,6 +10,109 @@ import { openDb, sqlPath } from './duck.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
+/* The eleven diagnostic KPIs the design spec names, in ONE place: this table is
+ * what `sigma()` computes from and what build-coverage.mjs measures coverage
+ * for. Two copies would drift, and a KPI whose coverage entry and whose sigma
+ * expression disagreed would rank a rule's effect against the wrong yardstick
+ * without anything going red.
+ *
+ * `requires` is not decoration. Each column is NULL in the eras that never
+ * recorded it (the Stats API omits the key, build-seasons.mjs preserves that as
+ * NULL), so both the coverage probe and the sigma query filter on it, and each
+ * KPI reports its own real first year instead of the league table's 1876.
+ *
+ * `available: false` is a first-class answer. run_distribution_variance is a
+ * property of the per-GAME run distribution and the spine holds team-SEASON
+ * totals; there is no expression over these columns that yields it. Reporting
+ * it as a KPI that is present-but-unavailable is the point — intake can refuse
+ * a rule whose diagnostic cannot be computed, which it could not do if the KPI
+ * were simply absent from the table. */
+export const KPIS = {
+  runs_per_game: {
+    expr: 'sum(r) * 1.0 / sum(g)', requires: ['r', 'g'], unit: 'runs/game' },
+  batting_average: {
+    expr: 'sum(h) * 1.0 / sum(ab)', requires: ['h', 'ab'], unit: 'rate' },
+  on_base_percentage: {
+    expr: 'sum(h + bb + hbp) * 1.0 / sum(ab + bb + hbp + sf)',
+    requires: ['h', 'bb', 'hbp', 'ab', 'sf'], unit: 'rate' },
+  slugging: {
+    /* Total bases from the counting columns: singles are h - d2 - d3 - hr, so
+     * TB = h + d2 + 2*d3 + 3*hr. The league table has no `tb` column. */
+    expr: 'sum(h + d2 + 2 * d3 + 3 * hr) * 1.0 / sum(ab)',
+    requires: ['h', 'd2', 'd3', 'hr', 'ab'], unit: 'rate' },
+  home_runs_per_game: {
+    expr: 'sum(hr) * 1.0 / sum(g)', requires: ['hr', 'g'], unit: 'HR/game' },
+  strikeout_rate: {
+    /* so/PA exactly. The old so/(ab+bb) was a PA proxy that omitted HBP and
+     * sacrifices — it ran ~1-2% high and drifted with era. */
+    expr: 'sum(so) * 1.0 / sum(pa)', requires: ['so', 'pa'], unit: 'rate' },
+  walk_rate: {
+    expr: 'sum(bb) * 1.0 / sum(pa)', requires: ['bb', 'pa'], unit: 'rate' },
+  steal_attempt_rate: {
+    expr: 'sum(sb + cs) * 1.0 / sum(g)', requires: ['sb', 'cs', 'g'],
+    unit: 'attempts/game' },
+  steal_success_rate: {
+    expr: 'sum(sb) * 1.0 / nullif(sum(sb + cs), 0)', requires: ['sb', 'cs'],
+    unit: 'rate' },
+  double_play_rate: {
+    expr: 'sum(gidp) * 1.0 / sum(pa)', requires: ['gidp', 'pa'], unit: 'rate' },
+  run_distribution_variance: {
+    available: false,
+    requires: ['per-game run totals'],
+    unit: 'runs^2',
+    reason: 'the spine holds team-SEASON totals; run-distribution variance is a '
+      + 'property of the per-game distribution, which no column here carries',
+    blockedBy: 'needs a game-level builder over the Stats API schedule/linescore '
+      + 'endpoints — a new dataset, not a new column',
+  },
+};
+
+/* Pure: the effect-size yardstick itself — the standard deviation of the
+ * season-to-season CHANGE in a series, not of the series. Exported because
+ * build-coverage.mjs bakes each KPI's sigma into coverage.json and sigma()
+ * answers it live; a second copy of four lines of arithmetic is exactly the
+ * kind of duplication that lets a published number and a queried number
+ * disagree. Returns null for a series too short to have two deltas rather
+ * than NaN, which would render as a real zero on a results page. */
+export function stdevOfDeltas(values) {
+  const deltas = [];
+  for (let i = 1; i < values.length; i++) deltas.push(values[i] - values[i - 1]);
+  if (deltas.length < 2) return null;
+  const mean = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+  return Math.sqrt(deltas.reduce((a, b) => a + (b - mean) ** 2, 0) / deltas.length);
+}
+
+/* Pure: the intake guard for diagnostics. A rule is sold on the KPI shifts it
+ * produces, so intake must be able to refuse one whose KPI the spine cannot
+ * compute for the requested season — for the same reason requireCoverage()
+ * exists, and before the fan is charged. An unavailable KPI and a KPI outside
+ * its year range are both refusals, but they are different sentences, so the
+ * caller gets `reason` rather than having to infer it. */
+export function requireKpis(cov, kpiKeys, year) {
+  const list = cov.kpis?.list || {};
+  const missing = [];
+  for (const kpi of kpiKeys) {
+    const c = list[kpi];
+    if (!c) { missing.push({ kpi, reason: 'unknown', first: null, last: null }); continue; }
+    if (c.available === false) {
+      missing.push({ kpi, reason: c.reason || 'unavailable', first: null, last: null });
+      continue;
+    }
+    if (year < c.first || year > c.last) {
+      missing.push({ kpi, reason: 'outside coverage', first: c.first, last: c.last });
+      continue;
+    }
+    /* A hollow year inside the range is still a refusal. strikeout_rate spans
+     * 1876-2025 but 13 seasons in the middle have no populated `pa`; checking
+     * only first/last would certify one of them and the fan would be charged
+     * for a diagnostic that cannot be computed. */
+    if (c.missingYears?.includes(year)) {
+      missing.push({ kpi, reason: 'gap inside coverage', first: c.first, last: c.last });
+    }
+  }
+  return { ok: missing.length === 0, missing };
+}
+
 /* Pure: the intake guard. Given a coverage manifest, the stats a rule needs,
  * and the season it asks about, say whether the data exists — and if not, name
  * what is missing and when it starts, because that is the fan-facing message. */
@@ -178,22 +281,23 @@ export async function openSpine(dataDir = path.join(ROOT, 'data'), opts = {}) {
     async sigma(stat, from = 1950, to = 2024) {
       checkYear(from, 'from');
       checkYear(to, 'to');
-      const EXPR = {
-        runs_per_game: 'sum(r) * 1.0 / sum(g)',
-        home_runs_per_game: 'sum(hr) * 1.0 / sum(g)',
-        strikeout_rate: 'sum(so) * 1.0 / (sum(ab) + sum(bb))',
-        walk_rate: 'sum(bb) * 1.0 / (sum(ab) + sum(bb))',
-        batting_average: 'sum(h) * 1.0 / sum(ab)',
-      };
-      if (!Object.hasOwn(EXPR, stat)) throw new Error(`sigma: unknown stat ${stat}`);
+      if (!Object.hasOwn(KPIS, stat)) throw new Error(`sigma: unknown stat ${stat}`);
+      const kpi = KPIS[stat];
+      /* Refuse rather than return a number for a KPI the spine cannot compute.
+       * A silent NaN here would become a "0.0 sigma" on a results page, which
+       * makes every rule look era-defining. */
+      if (kpi.available === false) {
+        throw new Error(`sigma: ${stat} is not computable from this spine — ${kpi.reason}`);
+      }
+      /* Drop the years that predate any required column instead of letting a
+       * NULL propagate: sum() over a column that is NULL for the whole season
+       * yields NULL, and one NULL year would blank two consecutive deltas. */
+      const present = kpi.requires.map((c) => `${c} IS NOT NULL`).join(' AND ');
       const rows = await db.all(
-        `SELECT year, ${EXPR[stat]} AS v FROM read_parquet('${league}')
-          WHERE year BETWEEN ${from} AND ${to}
-          GROUP BY year ORDER BY year`);
-      const deltas = [];
-      for (let i = 1; i < rows.length; i++) deltas.push(Number(rows[i].v) - Number(rows[i - 1].v));
-      const mean = deltas.reduce((a, b) => a + b, 0) / deltas.length;
-      return Math.sqrt(deltas.reduce((a, b) => a + (b - mean) ** 2, 0) / deltas.length);
+        `SELECT year, ${kpi.expr} AS v FROM read_parquet('${league}')
+          WHERE year BETWEEN ${from} AND ${to} AND ${present}
+          GROUP BY year HAVING ${kpi.expr} IS NOT NULL ORDER BY year`);
+      return stdevOfDeltas(rows.map((r) => Number(r.v)));
     },
 
     async close() { await db.close(); },

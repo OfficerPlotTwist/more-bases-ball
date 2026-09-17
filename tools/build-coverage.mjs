@@ -7,7 +7,7 @@
  * is charged — and every results page renders it. A hardcoded table would drift
  * away from the data it is supposed to guard, so every number here is a query.
  *
- * Per .superpowers/sdd/2026-09-15-data-spine/task-6-addendum.md, this builder:
+ * Per docs/decisions/2026-09-15-data-spine/task-6-addendum.md, this builder:
  *   1. refuses to run unless data/_build.json exists and reports complete=true
  *      (measuring coverage against an unverified or partial spine is worse
  *      than not measuring it at all);
@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, sqlPath } from './lib/duck.mjs';
+import { KPIS, stdevOfDeltas } from './lib/spine.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 /* MBB_DATA_DIR exists so the refusal gate below can be exercised against a
@@ -190,6 +191,84 @@ if (statcastKeys.length) {
   }
 }
 
+/* --- KPI coverage: all eleven diagnostics the design spec names. -----------
+ *
+ * `stats` above answers "does this COLUMN exist, and since when." That is not
+ * the question intake actually has to answer. A rule is sold on the KPI shifts
+ * it produces, so what intake needs is "can this KPI be computed for the year
+ * the fan asked about, and what does a real season-to-season move look like."
+ * Those differ: season_batting reaches 1876, but on-base percentage needs
+ * sacrifice flies, which nobody recorded before 1954.
+ *
+ * Every number here is measured. `first`/`last` come from the years where all
+ * of a KPI's required columns are actually populated; `sigma` is the effect-
+ * size denominator, computed over the same series the query would return, so a
+ * results page and a live sigma() call cannot disagree.
+ *
+ * `gapYears` is not padding. cs, gidp and sf each enter the record mid-history
+ * and the middle of a KPI's range can still be hollow; a fan reading
+ * "1954-2025" should not have to assume every year inside it is there. */
+const MODERN = 1950;   // sigma's floor: rule changes before this are not comparable
+const kpiList = {};
+let certified = 0;
+for (const [key, kpi] of Object.entries(KPIS)) {
+  if (kpi.available === false) {
+    kpiList[key] = {
+      available: false, requires: kpi.requires, unit: kpi.unit,
+      reason: kpi.reason, blockedBy: kpi.blockedBy,
+      source: DATASET_SOURCE.league.label, dataset: 'league',
+    };
+    console.log(`${key.padEnd(26)} UNAVAILABLE — ${kpi.blockedBy}`);
+    continue;
+  }
+  const present = kpi.requires.map((c) => `${c} IS NOT NULL`).join(' AND ');
+  const series = await db.all(
+    `SELECT year, ${kpi.expr} AS v FROM read_parquet('${DATASET_GLOB.league}')
+      WHERE ${present}
+      GROUP BY year HAVING ${kpi.expr} IS NOT NULL ORDER BY year`);
+  if (!series.length) {
+    /* A KPI whose columns exist in the schema but are empty everywhere must
+     * not silently vanish from the list — that would read as "not a KPI"
+     * rather than "we have no data for it", the same misreporting that
+     * unconsumedColumns exists to prevent. */
+    kpiList[key] = {
+      available: false, requires: kpi.requires, unit: kpi.unit,
+      reason: 'required columns are present in the schema but NULL in every season',
+      blockedBy: 'rebuild the spine — `node tools/build-seasons.mjs`',
+      source: DATASET_SOURCE.league.label, dataset: 'league',
+    };
+    console.log(`${key.padEnd(26)} UNAVAILABLE — no populated seasons`);
+    continue;
+  }
+  const years = series.map((r) => Number(r.year));
+  const first = years[0];
+  const last = years[years.length - 1];
+  /* The years INSIDE [first, last] that are not there. A first/last pair alone
+   * is not a coverage answer for a KPI whose middle is hollow: strikeout_rate
+   * spans 1876-2025 but 13 of those seasons have no populated `pa`, and a
+   * range check would have told a fan asking about one of them that their
+   * diagnostic was available. requireKpis() reads this list. */
+  const have = new Set(years);
+  const missingYears = [];
+  for (let y = first; y <= last; y++) if (!have.has(y)) missingYears.push(y);
+  const modern = series.filter((r) => Number(r.year) >= MODERN);
+  const sigma = stdevOfDeltas(modern.map((r) => Number(r.v)));
+  const latest = Number(series[series.length - 1].v);
+  kpiList[key] = {
+    available: true, first, last, seasons: years.length,
+    gapYears: missingYears.length, missingYears,
+    requires: kpi.requires, unit: kpi.unit,
+    source: DATASET_SOURCE.league.label, dataset: 'league', grain: 'team-season',
+    sigma: sigma == null ? null : Number(sigma.toPrecision(4)),
+    sigmaWindow: { from: Math.max(first, MODERN), to: last, seasons: modern.length },
+    latestSeason: { year: last, value: Number(latest.toPrecision(5)) },
+  };
+  certified++;
+  console.log(`${key.padEnd(26)} ${first}–${last}  ${years.length} seasons`
+    + `${kpiList[key].gapYears ? ` (${kpiList[key].gapYears} missing)` : ''}`
+    + `  sigma ${kpiList[key].sigma}  ${last}: ${kpiList[key].latestSeason.value}`);
+}
+
 /* --- leagueOnlySeasons: clubs MLB lists for a season with team totals but no
  * player-level rows in this source (Negro Leagues ~1920-1948, Federal League
  * 1914-1915, expansion franchises listed before they played). Read straight
@@ -207,6 +286,20 @@ const out = {
   generatedAt: new Date().toISOString(),
   spineBuiltAt: manifest.finishedAt,
   stats,
+  kpis: {
+    note: 'The diagnostic KPIs from the design spec, measured. `stats` says a '
+      + 'column exists; this says the KPI can be COMPUTED, for which years, and '
+      + 'what one season-to-season move is worth (sigma) — the denominator '
+      + 'effect-size ranking divides by. Definitions live in tools/lib/spine.mjs '
+      + '(KPIS) and are shared with sigma(), so this table and a live query '
+      + 'cannot disagree.',
+    sigmaDefinition: 'stdev of the year-over-year change in the league-wide '
+      + `value, over ${MODERN}+ only — pre-integration, pre-night-game baseball `
+      + 'is not a comparable yardstick for a modern rule.',
+    certified,
+    total: Object.keys(KPIS).length,
+    list: kpiList,
+  },
   unconsumedColumns: {
     note: 'Columns probed for population only. They are NOT stats intake can '
       + 'require — a zero here means the column exists in the schema but the '

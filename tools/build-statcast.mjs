@@ -10,7 +10,7 @@
  * Savant rewrites these URLs occasionally. Each board declares the columns it
  * must return; a drift throws instead of silently writing a column of nulls.
  *
- * BOARDS below is per .superpowers/sdd/2026-09-15-data-spine/task-5-addendum.md,
+ * BOARDS below is per docs/decisions/2026-09-15-data-spine/task-5-addendum.md,
  * which overrides the brief's table: four of the brief's five board definitions
  * had wrong column names, its name extraction (r.first_name/r.last_name) is
  * empty on every board, and it omitted the exit-velo/launch-angle board

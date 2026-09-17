@@ -36,7 +36,8 @@ box score is byte-identical before and after.
 
 ## Tests
 
-`for t in tests/*.test.js; do node $t; done` — all ten must pass.
+`node tools/run-tests.mjs` (portable) or
+`for t in tests/*.test.js; do node $t; done` — all 21 files must pass.
 `tests/defense-stress.test.js` is the one to run after touching anything in
 `fielders.js` or `resolveBallOut`: it covers the awkward custom layouts.
 
@@ -152,7 +153,38 @@ generated and gitignored.
   refetched seasons in their cache line, so `cache N hits 0 fetched` can never
   describe a run that went to the network.
 - Spine tests skip cleanly when `data/` is absent, so a fresh clone with no
-  network still shows the original twelve green.
+  network still shows the original twelve green. The pure halves do NOT skip —
+  `requireCoverage`, `requireKpis` and `stdevOfDeltas` decide whether a fan is
+  charged, so they are tested with no data and no network.
+- **`coverage.json` answers two different questions and they must not be
+  confused.** `stats` says a COLUMN exists and since when. `kpis` says a
+  DIAGNOSTIC can be COMPUTED — for which years, with what gaps, and against what
+  sigma. `season_batting` reaches 1876; on-base percentage starts at 1954,
+  because nobody recorded a sacrifice fly before then. All 11 spec KPIs are
+  reported; 10 are computable and `run_distribution_variance` is carried with
+  `available: false` because it needs per-GAME runs and the spine holds
+  team-SEASON totals. Never omit an unavailable KPI — an absent key reads as
+  "not a KPI", which is a different and wrong statement from "we have no data
+  for it", and only the second tells the next person what to build.
+- **KPI definitions live in ONE place**: `KPIS` in `tools/lib/spine.mjs`.
+  `sigma()` computes from it and `build-coverage.mjs` measures from it. Two
+  copies would let a baked-in sigma and a live `sigma()` disagree, ranking a
+  rule's effect against the wrong yardstick with nothing going red.
+- **`?? null` in the league-row mapping is load-bearing, never `?? 0`.** The
+  Stats API omits a stat key for eras that never recorded it (`sf` before 1954,
+  `cs` before ~1950, `gidp` before 1933) instead of returning zero, so a null
+  reaches Parquet and each KPI reports its real first year. A zero default would
+  have published a plausible-looking pre-1954 "OBP" that is not OBP.
+- **A first/last range is not a coverage answer.** A KPI's middle can be hollow:
+  `strikeout_rate` spans 1876-2025 but 13 seasons (1897-1909) never tabulated
+  batter strikeouts. Each entry carries `missingYears`, and `requireKpis()`
+  checks it — a gap inside the range is its own refusal with its own sentence,
+  distinct from out-of-range and from unavailable.
+- The spine's decision record — 32 rulings with their cost-if-wrong, every task
+  brief and report — is committed at `docs/decisions/2026-09-15-data-spine/`.
+  Three builders cite it by path for why they are shaped as they are. The review
+  diffs are not committed; the README there lists every commit range so
+  `git diff <range>` reproduces them exactly.
 - **`data.js` is unchanged and stays that way.** It is the committed slice
   the browser sim loads; its run environment is published in the README and
   `tests/ngon.test.js` asserts the box scores do not move. Regenerating it
