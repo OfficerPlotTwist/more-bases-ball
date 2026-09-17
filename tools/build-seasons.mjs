@@ -75,6 +75,53 @@ async function leagueAbbr(id, name) {
   return abbr;
 }
 
+/* `clubsFetched` says the two roster requests resolved for every expected
+ * club — that is what an integrity flag can actually gate on. `clubsWithRows`
+ * is recorded per year (see below) but is a COVERAGE fact, not a build
+ * failure: some historical clubs (Negro Leagues in 1924, Federal League in
+ * 1914, expansion franchises not yet formed in 1996) are legitimately in
+ * the schedule with zero player-level rows at the source. Folding that into
+ * completeness makes `complete` unsatisfiable against real baseball history. */
+const yearIsClean = (y) => y.clubsFetched === y.clubsExpected;
+
+/* MERGE, never replace. `node tools/build-seasons.mjs 2023 2024` used to
+ * overwrite a 150-year manifest with a 2-year one while all 150 parquet files
+ * sat untouched in data/seasons — and the downgraded manifest still said
+ * complete:true (truthfully, for the two years it now described), so both
+ * gates that read it passed while it accounted for none of the other 148
+ * years. coverage.json's leagueOnlySeasons is derived FROM this file, so a
+ * 1924 results page would have silently lost its Negro Leagues provenance.
+ *
+ * Pure on purpose: no fs, no network, no globals, so tests/manifest-merge.test.js
+ * can exercise it without a multi-minute build. */
+export function mergeManifest(existing, run) {
+  const inRange = (y) => y >= run.firstYear && y <= run.lastYear;
+  const prevYears = (existing && Array.isArray(existing.years) ? existing.years : [])
+    .filter((y) => !inRange(y.year));
+  const years = [...prevYears, ...run.years].sort((a, b) => a.year - b.year);
+
+  const prevFailures = (existing && Array.isArray(existing.failures) ? existing.failures : [])
+    .filter((f) => !inRange(f.year));
+  const failures = [...prevFailures, ...run.failures];
+
+  /* A prior run's failure in a year this run did NOT touch correctly holds
+   * `complete` false until that year is rebuilt. That is the intent. */
+  const complete = run.finishedLoop && failures.length === 0 && years.every(yearIsClean);
+
+  return {
+    tool: run.tool,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+    complete,
+    firstYear: years.length ? years[0].year : run.firstYear,
+    lastYear: years.length ? years[years.length - 1].year : run.lastYear,
+    /* What this invocation covered, as against what the manifest describes. */
+    lastRun: { firstYear: run.firstYear, lastYear: run.lastYear, finishedAt: run.finishedAt },
+    years,
+    failures,
+  };
+}
+
 const COLUMNS = `
     CAST(year AS INTEGER) AS year, CAST(mlbam AS INTEGER) AS mlbam,
     CAST(bbref AS VARCHAR) AS bbref, CAST(name AS VARCHAR) AS name,
@@ -107,27 +154,45 @@ const years = [];
 const startedAt = new Date().toISOString();
 let finishedLoop = false;
 
-/* `clubsFetched` says the two roster requests resolved for every expected
- * club — that is what an integrity flag can actually gate on. `clubsWithRows`
- * is recorded per year (see below) but is a COVERAGE fact, not a build
- * failure: some historical clubs (Negro Leagues in 1924, Federal League in
- * 1914, expansion franchises not yet formed in 1996) are legitimately in
- * the schedule with zero player-level rows at the source. Folding that into
- * completeness makes `complete` unsatisfiable against real baseball history. */
-const yearIsClean = (y) => y.clubsFetched === y.clubsExpected;
+/* The prior manifest, read before anything is written, so a scoped run
+ * merges into it instead of replacing it. Unreadable or corrupt is treated
+ * as absent — a first build. */
+let existingManifest = null;
+try {
+  existingManifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'));
+} catch { existingManifest = null; }
 
 const writeManifest = () => {
-  const complete = finishedLoop && failures.length === 0 && years.every(yearIsClean);
-  const body = `${JSON.stringify({
+  const merged = mergeManifest(existingManifest, {
     tool: 'build-seasons.mjs',
     startedAt,
     finishedAt: new Date().toISOString(),
-    complete,
     firstYear: FIRST,
     lastYear: LAST,
     years,
     failures,
-  }, null, 2)}\n`;
+    finishedLoop,
+  });
+
+  /* A merged manifest can inherit a year whose parquet has since been
+   * deleted. The claim is only worth what the disk backs: verify, and
+   * demote any year the files no longer support. */
+  const missing = merged.years.filter(
+    (y) => !fs.existsSync(path.join(OUT, `${y.year}.parquet`)));
+  if (missing.length) {
+    const gone = new Set(missing.map((y) => y.year));
+    merged.years = merged.years.filter((y) => !gone.has(y.year));
+    for (const y of missing) {
+      merged.failures.push({ year: y.year, club: null, error: 'parquet missing at manifest write' });
+    }
+    merged.complete = finishedLoop && merged.failures.length === 0
+      && merged.years.every(yearIsClean);
+    console.log(`WARN manifest: no parquet on disk for ${[...gone].join(', ')}`
+      + ' — dropped from the manifest');
+  }
+
+  const complete = merged.complete;
+  const body = `${JSON.stringify(merged, null, 2)}\n`;
   /* Write-then-rename: a kill mid-write must never leave corrupt JSON in
    * the one artifact downstream tasks gate on. rename is atomic on NTFS
    * and POSIX alike. */

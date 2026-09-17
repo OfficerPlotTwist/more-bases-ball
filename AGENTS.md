@@ -111,6 +111,20 @@ generated and gitignored.
     failure mode this project has, worse than refusing to answer at all.
   - `openSpine()` refuses for the same reason, with `{ allowIncomplete:
     true }` as a debugging-only escape.
+- **`_build.json` is MERGED, never replaced.** A scoped run
+  (`node tools/build-seasons.mjs 2023 2024`) rewrote the whole manifest from
+  its own argv, so a 150-year manifest became a 2-year one while all 150
+  parquet files sat untouched beside it — and it still said `complete: true`,
+  truthfully, for the two years it now described. All three gates passed on a
+  manifest accounting for none of the other 148 years, and `leagueOnlySeasons`
+  (derived from it) would have collapsed from 111 club-years to whatever those
+  two held, stripping a 1924 results page of its Negro Leagues provenance.
+  `mergeManifest(existing, run)` is pure and exported for exactly this reason:
+  the bug lived behind a multi-minute network build and could not be tested
+  until it came out. `tests/manifest-merge.test.js` asserts the year count.
+  `writeManifest()` then checks the merged claim against disk and demotes any
+  year whose parquet has gone — an inherited entry is only worth what the
+  files back.
 - `spine.mjs` validates every query parameter and throws rather than
   interpolating it raw: `year` must be an integer, `team` must match
   `/^[A-Z]{2,4}(-[A-Z])?$/`, `role` must be `bat` or `pit`. These parameters
