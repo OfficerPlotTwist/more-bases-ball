@@ -84,5 +84,58 @@ for (const c of golden.cases) {
 check('an identity rules object does not move any golden box score',
   inertMoved === 0, inertMoved ? `${inertMoved} case(s) diverged` : '');
 
+// ---- applyModifiers ----
+const baseRates = { bb: 0.09, hr: 0.04, d3: 0.004, d2: 0.05, s1: 0.14, k: 0.23 };
+const same = S.applyModifiers(baseRates, { bb: 1, hr: 1, d3: 1, d2: 1, s1: 1, k: 1 });
+check('identity modifiers return the same rates',
+  Object.keys(baseRates).every((k) => Math.abs(same[k] - baseRates[k]) < 1e-12),
+  JSON.stringify(same));
+
+const doubled = S.applyModifiers(baseRates, { hr: 2 });
+check('a single multiplier moves only its own rate',
+  Math.abs(doubled.hr - 0.08) < 1e-12 && Math.abs(doubled.bb - 0.09) < 1e-12,
+  `hr ${doubled.hr}`);
+
+// The clamps that keep a game playable, inherited from adjustedRates.
+const absurd = S.applyModifiers(baseRates, { bb: 9, hr: 9, d2: 9, s1: 9 });
+const nonOut = absurd.bb + absurd.hr + absurd.d3 + absurd.d2 + absurd.s1;
+check('non-out share is clamped at 0.92', nonOut <= 0.92 + 1e-9, nonOut.toFixed(4));
+check('strikeouts never go below 2%', absurd.k >= 0.02 - 1e-9, absurd.k.toFixed(4));
+
+check('applyModifiers does not mutate its input',
+  Math.abs(baseRates.hr - 0.04) < 1e-12);
+
+// The whole point of Tier C: it is real, it is listed, and it does nothing.
+const tierC = R.resolve({ ids: R.TIERS.C });
+let cMoved = 0;
+for (const c of golden.cases) {
+  const cfg = Object.assign({}, c.cfg, { rules: tierC });
+  if (boxOf(S.simGame(NYY, LAD, cfg, c.seed)) !== c.box) cMoved++;
+}
+check(`all ${R.TIERS.C.length} tier C rules active changes nothing`,
+  cMoved === 0, cMoved ? `${cMoved} case(s) diverged` : '');
+
+// A full historical year, with every coefficient still at identity.
+const y1968 = R.resolve({ year: 1968 });
+let yMoved = 0;
+for (const c of golden.cases) {
+  const cfg = Object.assign({}, c.cfg, { rules: y1968 });
+  if (boxOf(S.simGame(NYY, LAD, cfg, c.seed)) !== c.box) yMoved++;
+}
+check('the 1968 rule set at identity coefficients changes nothing',
+  yMoved === 0, yMoved ? `${yMoved} case(s) diverged` : '');
+
+// Wiring check: a non-identity modifier must actually move at least one
+// golden box score, or cfg.rules never reached plateAppearance and the
+// identity checks above would be vacuous.
+const loud = { modifiers: { hr: 3, bb: 1, k: 1, s1: 1, d2: 1, d3: 1 } };
+let loudMoved = 0;
+for (const c of golden.cases) {
+  const cfg = Object.assign({}, c.cfg, { rules: loud });
+  if (boxOf(S.simGame(NYY, LAD, cfg, c.seed)) !== c.box) loudMoved++;
+}
+check('a non-identity modifier DOES move the box score (wiring is real)',
+  loudMoved > 0, `${loudMoved} case(s) diverged`);
+
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

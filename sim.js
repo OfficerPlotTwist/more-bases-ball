@@ -72,12 +72,44 @@
     return { bb, hr, d3, d2, s1, k: Math.max(0.02, k) };
   }
 
+  /* Apply a composed set of rate multipliers, then the same two clamps
+   * adjustedRates uses: keep the non-out share under 92% so a half-inning
+   * can always end, and leave at least 2% strikeouts. Returns a new
+   * object; the caller's rates are not touched. */
+  function applyModifiers(rates, mods) {
+    const m = mods || {};
+    const mul = (k) => (typeof m[k] === 'number' ? m[k] : 1);
+    let bb = rates.bb * mul('bb');
+    let hr = rates.hr * mul('hr');
+    let d3 = rates.d3 * mul('d3');
+    let d2 = rates.d2 * mul('d2');
+    let s1 = rates.s1 * mul('s1');
+    let k = rates.k * mul('k');
+    const nonOut = bb + hr + d3 + d2 + s1;
+    if (nonOut > 0.92) {
+      const scale = 0.92 / nonOut;
+      bb *= scale; hr *= scale; d3 *= scale; d2 *= scale; s1 *= scale;
+    }
+    k = Math.min(k, 1 - (bb + hr + d3 + d2 + s1) - 0.02);
+    return { bb, hr, d3, d2, s1, k: Math.max(0.02, k) };
+  }
+
   // Chance a plate appearance ends in BB / HR / 3B / 2B / 1B, straight
   // from the player's real season rates; `moundDeltaFt` (optional) shifts
   // them for a non-regulation mound. Anything left over is an out.
   function plateAppearance(p, rnd, moundDeltaFt, rules) {
-    if (moundDeltaFt) {
-      const a = adjustedRates(p, moundDeltaFt);
+    const mods = rules && rules.modifiers;
+    const hasMods = !!mods && Object.keys(mods).some((k) => mods[k] !== 1);
+    if (moundDeltaFt || hasMods) {
+      let a = moundDeltaFt ? adjustedRates(p, moundDeltaFt) : {
+        bb: p.bb / p.pa,
+        hr: p.hr / p.pa,
+        d3: p.d3 / p.pa,
+        d2: p.d2 / p.pa,
+        s1: (p.h - p.d2 - p.d3 - p.hr) / p.pa,
+        k: p.so / p.pa,
+      };
+      if (hasMods) a = applyModifiers(a, mods);
       const events = [
         ['BB', a.bb], ['HR', a.hr], ['3B', a.d3], ['2B', a.d2], ['1B', a.s1],
       ];
@@ -153,7 +185,7 @@
     while (outs < cfg.outs) {
       const batter = side.lineup[side.spot % side.lineup.length];
       side.spot++;
-      const type = plateAppearance(batter, rnd);
+      const type = plateAppearance(batter, rnd, 0, cfg.rules);
       const entry = {
         inning: ctx.inning, half: ctx.half, team: side.abbr,
         batter: batter.name, pos: batter.pos, type, sub: null,
@@ -297,7 +329,7 @@
   }
 
   const API = {
-    simGame, simMany, scanBases, plateAppearance, adjustedRates,
+    simGame, simMany, scanBases, plateAppearance, adjustedRates, applyModifiers,
     mulberry32, DEFAULT_CFG, MOUND_REG_FT, tunables,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
