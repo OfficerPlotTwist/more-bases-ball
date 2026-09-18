@@ -58,5 +58,31 @@ const merged = Object.assign({}, S.DEFAULT_CFG, { bases: 3 });
 check('DEFAULT_CFG merge leaves rules falsy', !merged.rules,
   `rules = ${JSON.stringify(merged.rules)}`);
 
+// ---- tunables: the four bare literals become rule-addressable ----
+const def = S.tunables(null);
+check('tunables(null) returns the historical literals',
+  def.stretch1B === 0.32 && def.stretch2B === 0.22 &&
+  def.sacFly === 0.26 && def.doublePlay === 0.13,
+  JSON.stringify(def));
+
+const over = S.tunables({ tunables: { stretch1B: 0.5 } });
+check('tunables override one value and keep the rest',
+  over.stretch1B === 0.5 && over.stretch2B === 0.22 && over.sacFly === 0.26,
+  JSON.stringify(over));
+
+check('tunables treat 0 as a real value, not as missing',
+  S.tunables({ tunables: { doublePlay: 0 } }).doublePlay === 0);
+
+// An all-identity rules object must leave the game exactly where it was.
+const R = require(path.join(__dirname, '..', 'rules.js'));
+const inert = R.resolve({ ids: [] });
+let inertMoved = 0;
+for (const c of golden.cases) {
+  const cfg = Object.assign({}, c.cfg, { rules: inert });
+  if (boxOf(S.simGame(NYY, LAD, cfg, c.seed)) !== c.box) inertMoved++;
+}
+check('an identity rules object does not move any golden box score',
+  inertMoved === 0, inertMoved ? `${inertMoved} case(s) diverged` : '');
+
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);
