@@ -1721,7 +1721,61 @@
     return { year, active };
   }
 
-  const API = { CATALOG, TIERS, byId, forYear };
+  const RATE_KEYS = ['bb', 'k', 's1', 'd2', 'd3', 'hr'];
+
+  function identityMods() {
+    const m = {};
+    for (const k of RATE_KEYS) m[k] = 1;
+    return m;
+  }
+
+  // Why a rule cannot be simulated, for the UI to show beside it.
+  function declinedReason(r) {
+    if (r.modelable_per_pa === 'no') {
+      return r.model_note || 'not representable in a per-plate-appearance model';
+    }
+    return 'no quantified effect in the sources; shipped without a rate effect '
+      + 'rather than with an invented one';
+  }
+
+  // Multipliers compose by multiplication, which is associative and
+  // commutative -- that is what makes a hand-picked selection independent
+  // of click order. Do not add an additive coefficient here; it would
+  // silently break rules-resolve.test.js's order-independence check.
+  function resolve(selection) {
+    const sel = selection || {};
+    let active;
+    if (Array.isArray(sel.ids)) {
+      active = sel.ids.map((id) => {
+        const r = BY_ID.get(id);
+        if (!r) throw new Error('unknown rule id: ' + id);
+        return r;
+      }).sort((a, b) => (a.year - b.year) || (a.id < b.id ? -1 : 1));
+    } else {
+      active = forYear(sel.year).active;
+    }
+
+    const modifiers = identityMods();
+    const declared = [];
+    const structural = {};
+
+    for (const r of active) {
+      if (r.tier === 'C') {
+        declared.push({ id: r.id, name: r.name, year: r.year, reason: declinedReason(r) });
+        continue;
+      }
+      if (r.tier === 'B' && r.rates) {
+        for (const k of RATE_KEYS) {
+          if (typeof r.rates[k] === 'number') modifiers[k] *= r.rates[k];
+        }
+      }
+      // Tier A structural settings land here in phase 2.
+    }
+
+    return { ids: active.map((r) => r.id), structural, modifiers, declared };
+  }
+
+  const API = { CATALOG, TIERS, byId, forYear, resolve, RATE_KEYS };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
   else global.MBB_RULES = API;
 })(typeof window !== 'undefined' ? window : globalThis);
