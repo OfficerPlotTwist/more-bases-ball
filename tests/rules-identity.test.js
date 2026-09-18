@@ -137,5 +137,66 @@ for (const c of golden.cases) {
 check('a non-identity modifier DOES move the box score (wiring is real)',
   loudMoved > 0, `${loudMoved} case(s) diverged`);
 
+// ---- graph and tri engines accept rules without moving ----
+const L = require(path.join(__dirname, '..', 'layout.js'));
+const G = require(path.join(__dirname, '..', 'graphsim.js'));
+const T = require(path.join(__dirname, '..', 'trisim.js'));
+
+const lay = L.makeStarter(250);
+function graphBox(cfg, seed) {
+  const g = G.simGameGraph(NYY, LAD, lay, cfg, seed);
+  return JSON.stringify({
+    away: g.away, home: g.home, winner: g.winner, innings: g.innings,
+    plays: g.log.map((e) => [e.type, e.sub, e.runs, e.outsAfter]),
+  });
+}
+let graphMoved = 0;
+for (const seed of [7, 42, 99]) {
+  const plain = graphBox({ innings: 9, outs: 3 }, seed);
+  const withRules = graphBox({ innings: 9, outs: 3, rules: R.resolve({ year: 1968 }) }, seed);
+  if (plain !== withRules) graphMoved++;
+}
+check('graph engine: an identity rule set changes nothing', graphMoved === 0,
+  graphMoved ? `${graphMoved} seed(s) diverged` : '');
+
+// Wiring check, same shape as the sim.js loud-modifier proof above: identity
+// coefficients are indistinguishable from no coefficients at all, so the
+// check above could pass vacuously if cfg.rules never reached
+// CORE.plateAppearance through the graph engine. A non-identity modifier
+// must actually move the box for at least one seed.
+let graphLoudMoved = 0;
+for (const seed of [7, 42, 99]) {
+  const plain = graphBox({ innings: 9, outs: 3 }, seed);
+  const withLoud = graphBox({ innings: 9, outs: 3, rules: loud }, seed);
+  if (plain !== withLoud) graphLoudMoved++;
+}
+check('graph engine: a non-identity modifier DOES move the box (wiring is real)',
+  graphLoudMoved > 0, `${graphLoudMoved} seed(s) diverged`);
+
+function triBox(cfg, seed) {
+  const g = T.simGameTri(NYY, LAD, lay, cfg, seed);
+  return JSON.stringify({
+    away: g.away, home: g.home, winner: g.winner, innings: g.innings,
+    plays: g.log.map((e) => [e.type, e.sub, e.runs, e.outsAfter]),
+  });
+}
+let triMoved = 0;
+for (const seed of [7, 42, 99]) {
+  const plain = triBox({ innings: 9, outs: 3 }, seed);
+  const withRules = triBox({ innings: 9, outs: 3, rules: R.resolve({ year: 1968 }) }, seed);
+  if (plain !== withRules) triMoved++;
+}
+check('tri engine: an identity rule set changes nothing', triMoved === 0,
+  triMoved ? `${triMoved} seed(s) diverged` : '');
+
+let triLoudMoved = 0;
+for (const seed of [7, 42, 99]) {
+  const plain = triBox({ innings: 9, outs: 3 }, seed);
+  const withLoud = triBox({ innings: 9, outs: 3, rules: loud }, seed);
+  if (plain !== withLoud) triLoudMoved++;
+}
+check('tri engine: a non-identity modifier DOES move the box (wiring is real)',
+  triLoudMoved > 0, `${triLoudMoved} seed(s) diverged`);
+
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

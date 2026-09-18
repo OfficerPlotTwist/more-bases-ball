@@ -81,7 +81,7 @@
   function playHalfTri(side, layout, paths, slots, cfg, rnd, log, ctx) {
     let outs = 0, runs = 0, cycle = 0;
     const occ = new Map();
-    const geo = { layout, rnd };
+    const geo = { layout, rnd, rules: cfg.rules || null };
 
     while (outs < cfg.outs && cycle < 3000) {
       const thisCycle = [];
@@ -107,7 +107,7 @@
         const canMove = layout.runMode === 'any'
           ? () => true
           : (r) => r.origin === plate;
-        const type = CORE.plateAppearance(batter, rnd, ctx.moundDelta);
+        const type = CORE.plateAppearance(batter, rnd, ctx.moundDelta, cfg.rules || null);
         const entry = {
           inning: ctx.inning, half: ctx.half, team: side.abbr,
           batter: batter.name, pos: batter.pos, plate,

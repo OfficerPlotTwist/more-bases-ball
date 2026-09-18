@@ -239,6 +239,7 @@
       bases: +$('bases-range').value,
       innings: +$('innings-range').value,
       outs: +$('outs-range').value,
+      rules: null,   // era selection lands here in phase 2
     };
   }
 
