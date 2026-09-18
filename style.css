@@ -156,7 +156,10 @@ button:focus-visible, select:focus-visible, input:focus-visible {
 }
 
 @media (max-width: 940px) {
-  .arena { grid-template-columns: 1fr; }
+  /* minmax(0, ...) not 1fr: a bare 1fr track is floored at min-content, so
+     the 12-inning linescore widens the whole page instead of scrolling
+     inside .board */
+  .arena { grid-template-columns: minmax(0, 1fr); }
 }
 
 .panel {
@@ -501,4 +504,72 @@ footer {
   height: auto;
   border-radius: 8px;
   background: #0c120e;
+}
+
+/* ---------------- mobile / touch ---------------- */
+
+/* OrbitControls swallows touch gestures only if the browser stops
+   treating them as page scroll. Without this the 3D field cannot be
+   orbited on a phone at all. */
+.fieldbox-3d canvas { touch-action: none; }
+
+@media (max-width: 720px) {
+  .wrap { padding: 0 16px; }
+
+  header.masthead { padding: 16px 0 10px; gap: 6px; }
+  .masthead .tagline { font-size: 11px; letter-spacing: 0.1em; }
+
+  /* one control per row, each full width — 26px column gaps strand
+     half-width selects next to each other at phone width */
+  .deck {
+    padding: 12px 14px;
+    gap: 12px;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .deck .knob { width: 100%; }
+  /* 16px keeps iOS Safari from zooming the page on focus */
+  select { width: 100%; min-width: 0; font-size: 16px; padding: 10px; }
+  input[type='range'] { width: 100%; height: 34px; }
+  input[type='number'] { font-size: 16px; }
+
+  /* eight stacked knobs push PLAY BALL ~750px down a 390px phone.
+     Dock the actions instead so they are reachable from anywhere. */
+  .deck .actions {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 30;
+    margin: 0;
+    gap: 8px;
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+    background: rgba(10, 16, 12, 0.94);
+    border-top: 1px solid var(--steel-edge);
+    backdrop-filter: blur(6px);
+  }
+  .deck .actions button { flex: 1 1 0; min-width: 0; min-height: 44px; padding: 11px 8px; font-size: 13px; }
+  body { padding-bottom: 84px; }
+
+  .panel > h2 { padding: 8px 12px; }
+  .board { padding: 10px 12px 12px; }
+  table.linescore td { min-width: 26px; padding: 4px; font-size: 15px; }
+  table.linescore td.teamname { font-size: 14px; padding: 4px 8px; }
+
+  /* the log is a side column on desktop; stacked under the field it has
+     to stay short or the field scrolls off the top on every pitch */
+  .pbp-panel { max-height: 360px; }
+
+  .toolbtn, .viewbtn, .cambtn { min-height: 38px; padding: 8px 12px; }
+  .toolrow .spacer { display: none; }
+  label.inline { flex: 1 1 100%; justify-content: space-between; }
+  .camrow { padding-left: 0; border-left: 0; }
+  .camhint { flex: 1 1 100%; }
+
+  .fieldbox, .fieldbox-3d { padding: 6px 8px 10px; }
+  .results-body, .board { -webkit-overflow-scrolling: touch; }
+  table.stat { min-width: 0; font-size: 13px; }
+  table.stat th, table.stat td { padding: 5px 10px 5px 0; }
+}
+
+@media (max-width: 420px) {
+  .deck .actions button { font-size: 12px; letter-spacing: 0.04em; }
 }

@@ -132,7 +132,7 @@
             <button class="cambtn" data-view="high">High</button>
             <button class="cambtn" data-view="overhead">Overhead</button>
             <button class="cambtn" data-view="plate">Plate</button>
-            <span class="camhint">drag to orbit &middot; scroll to zoom</span>
+            <span class="camhint">drag to orbit &middot; pinch or scroll to zoom</span>
           </span>
         </div>
         <div class="fieldbox" id="fieldbox-2d">
@@ -171,5 +171,19 @@
 <script src="editor.js"></script>
 <script src="ui.js"></script>
 <script type="module" src="field3d.js"></script>
+
+<script>
+// Mobile only: the action bar is docked at the bottom, so a tap on PLAY BALL
+// can fire while the field is scrolled off screen. Bring it into view.
+(function () {
+  var btn = document.getElementById('play-btn');
+  var title = document.getElementById('field-title');
+  if (!btn || !title) return;
+  btn.addEventListener('click', function () {
+    if (window.innerWidth > 720) return;
+    title.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+})();
+</script>
 </body>
 </html>
