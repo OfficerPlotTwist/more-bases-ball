@@ -308,7 +308,7 @@ estimate is demoted to Tier C rather than given a guessed coefficient.
 
 ## 6. Testing
 
-Three new files, joining the existing 22.
+Five new files, joining the existing 22.
 
 ### `tests/rules-identity.test.js` — the freeze guard
 
@@ -366,7 +366,7 @@ scrolling body, capped like `.pbp-panel` at 360px on phones.
 `rules.js` with all 112 rules; catalog committed to
 `docs/decisions/2026-09-18-era-rules/`; `leagueLine()` added to `spine.mjs`;
 `tests/rules-identity.test.js` green with rules off; engine parameters appended
-but every default taking the legacy branch. Exit: 23 test files pass (22 existing plus the identity
+but every default taking the legacy branch. Exit: 25 test files pass (22 existing plus catalog, resolve and identity
 guard), and the identity fixtures prove the engine is untouched in its default configuration.
 
 **Phase 2 — Tier A plus the 12 largest Tier B rules.**
@@ -378,7 +378,7 @@ QuesTec, 2022 universal DH, 2023 shift ban). Exit: calibration test green at
 
 **Phase 3 — the remaining 36 Tier B rules and the Tier C surface.**
 Full timeline in the UI, every rule visible with its tier and sources.
-Exit: all 112 rules reachable from the UI, 25 test files pass.
+Exit: all 112 rules reachable from the UI, 27 test files pass.
 
 ## 9. What this explicitly does not do
 
