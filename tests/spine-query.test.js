@@ -263,6 +263,36 @@ function check(label, ok, detail) {
     !!unknownStatErr && unknownStatErr.message === 'sigma: unknown stat nope',
     unknownStatErr && unknownStatErr.message);
 
+  // ---- leagueLine: league totals per season, for era calibration ----
+  const l1968 = await s.leagueLine(1968);
+  check('leagueLine(1968) returns one row with a year',
+    l1968 && l1968.year === 1968, JSON.stringify(l1968 && l1968.clubs));
+  check('leagueLine(1968) totals are plain finite numbers',
+    ['g', 'r', 'pa', 'ab', 'h', 'hr', 'bb', 'so'].every(
+      (k) => typeof l1968[k] === 'number' && Number.isFinite(l1968[k])));
+  check('leagueLine(1968) runs/team-game is the known 3.42',
+    Math.abs(l1968.r / l1968.g - 3.42) < 0.05,
+    `${(l1968.r / l1968.g).toFixed(3)}`);
+  check('leagueLine(1968) derived K/PA is the known .158',
+    Math.abs(l1968.so / l1968.pa - 0.158) < 0.005,
+    `${(l1968.so / l1968.pa).toFixed(4)}`);
+
+  // The era columns that did not exist must be null, not zero.
+  const l1930 = await s.leagueLine(1930);
+  check('leagueLine(1930) sacrifice flies are null, not zero', l1930.sf === null,
+    `sf = ${JSON.stringify(l1930.sf)}`);
+
+  // Same trust boundary as every other query on this module.
+  let leagueYearErr = null;
+  try { await s.leagueLine('1968 OR 1=1'); } catch (e) { leagueYearErr = e; }
+  check('leagueLine rejects a non-integer year', !!leagueYearErr,
+    leagueYearErr && leagueYearErr.message);
+
+  let leagueOutOfRangeErr = null;
+  try { await s.leagueLine(1800); } catch (e) { leagueOutOfRangeErr = e; }
+  check('leagueLine throws for a year with no data', !!leagueOutOfRangeErr,
+    leagueOutOfRangeErr && leagueOutOfRangeErr.message);
+
   await s.close();
   process.exit(failures ? 1 : 0);
 })();
