@@ -47,9 +47,12 @@ partially, 29 not at all. The intersection — quantified **and** modelable — 
 The engine's own structure sorts the catalog. Tiers are a property of what
 moreBasesBall can represent, not of how important a rule was.
 
-### Tier A — structural (7 rules)
+### Tier A — structural (5 catalog rules)
 
-Expressible as game state or config. No rate math.
+Expressible as game state, not as a rate. The first three rows below are
+existing engine knobs rather than catalog entries — they are listed because an
+era bundle sets them, but they are not among the 112 and are not counted in the
+partition.
 
 | Rule | Year | Implementation |
 |---|---|---|
@@ -67,7 +70,7 @@ batter when `ctx.inning > cfg.innings`. `ctx` already carries `inning`
 (`sim.js:201`) and `side.spot` (`sim.js:185`) identifies the batter. It costs
 **zero** new random draws, so it cannot perturb the stream.
 
-### Tier B — rate perturbation (48 rules)
+### Tier B — rate perturbation (43 rules)
 
 `adjustedRates(p, deltaFt)` at `sim.js:37-55` is already a complete, tested,
 documented rate-perturbation engine. It serves exactly one rule (mound
@@ -81,12 +84,20 @@ scoring-relevant era rules — the 1880→1889 walk-count ladder, 1893's rubber,
 1969 zone changes, 1969 mound, 2001 QuesTec, 2021 sticky stuff — are the same
 shape, differing only in which of the six rates they move and by how much.
 
-### Tier C — declared, not simulated (29 rules)
+### Tier C — declared, not simulated (64 rules)
 
 Replay, mound-visit limits, pine tar, pitch timers, the reserve clause, the
 1965 draft, postseason structure. These ship in the catalog and appear in the
 UI marked **in effect · no simulated effect**, each with the reason it cannot
 be modeled.
+
+Tier C is larger than it first looks, and the breakdown matters: 29 rules are
+flatly unmodelable per plate appearance, 25 are partially modelable (the engine
+can represent some of what they changed but not all), and 10 are modelable in
+principle but were never quantified by any source. That last group is the one
+worth re-reading later — each is a rule the engine could carry if someone finds
+the numbers. Tiers partition the catalog exactly: 5 + 43 + 64 = 112, asserted by
+`tests/rules-catalog.test.js`.
 
 This is deliberate and follows the precedent AGENTS.md sets for
 `coverage.json`: *never omit an unavailable KPI — an absent key reads as "not a
