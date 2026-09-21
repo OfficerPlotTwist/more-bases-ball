@@ -34,12 +34,41 @@ const a = R.resolve({ ids: ['1963-strike-zone-enlarged-shoulders-to-knees'] });
 check('resolve({ids}) accepts an explicit selection', a.ids.length === 1,
   JSON.stringify(a.ids));
 
-const someB = R.TIERS.B.slice(0, 5);
-const fwd = R.resolve({ ids: someB });
-const rev = R.resolve({ ids: someB.slice().reverse() });
-check('composition is order-independent',
-  RATES.every((k) => Math.abs(fwd.modifiers[k] - rev.modifiers[k]) < 1e-12),
-  `${JSON.stringify(fwd.modifiers)} vs ${JSON.stringify(rev.modifiers)}`);
+// composeModifiers is tested directly, not through resolve(), and with a
+// deliberately unsorted list. resolve() sorts its `active` array by
+// (year, id) before composing, so a forward id list and a reversed one
+// always produce the identical, already-sorted array resolve() actually
+// composes from -- testing resolve({ids}) forward vs reversed can never
+// falsify a broken (order-dependent) composition, because both calls feed
+// composition the same canonical order regardless of what the caller
+// passed in. Calling composeModifiers directly, with genuinely different
+// orderings and no sort in between, is what makes this check real.
+// The expected value is computed independently (plain left-to-right
+// multiplication over a fixed set), so any composition that is not truly
+// order-independent -- e.g. an additive coefficient, which turns each
+// rule's contribution into a non-commutative affine step instead of a
+// scalar product -- lands on a different number and fails here regardless
+// of which ordering produced it.
+function ruleWithRates(id, rates) { return { id, tier: 'B', rates }; }
+const synthetic = [
+  ruleWithRates('t1', { bb: 1.10, hr: 1.20 }),
+  ruleWithRates('t2', { bb: 0.95, k: 1.05 }),
+  ruleWithRates('t3', { hr: 0.90, s1: 1.02 }),
+];
+const expectedProduct = {
+  bb: 1.10 * 0.95, k: 1.05, s1: 1.02, d2: 1, d3: 1, hr: 1.20 * 0.90,
+};
+const orderings = {
+  forward: synthetic,
+  reversed: synthetic.slice().reverse(),
+  shuffled: [synthetic[1], synthetic[2], synthetic[0]],
+};
+for (const [label, ordering] of Object.entries(orderings)) {
+  const got = R.composeModifiers(ordering).modifiers;
+  check(`composeModifiers(${label}) matches the order-independent expected product`,
+    RATES.every((k) => Math.abs(got[k] - expectedProduct[k]) < 1e-12),
+    JSON.stringify(got));
+}
 
 const empty = R.resolve({ ids: [] });
 check('empty selection is the identity',

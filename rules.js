@@ -1738,15 +1738,68 @@
       + 'rather than with an invented one';
   }
 
-  // Multipliers compose by multiplication, which is associative and
-  // commutative -- that is what makes a hand-picked selection independent
-  // of click order. Do not add an additive coefficient here; it would
-  // silently break rules-resolve.test.js's order-independence check.
+  // A rate coefficient must be a finite number greater than 0. NaN would
+  // multiply a rate to NaN, and every NaN comparison in plateAppearance's
+  // event roll is false -- so every plate appearance silently becomes an
+  // OUT, with no error anywhere. A negative coefficient is worse: it looks
+  // like a normal game while quietly deleting an event type and running the
+  // probability accumulator backwards. Zero is excluded for the same
+  // reason: a multiplier of 0 deletes the event type outright. Any of the
+  // three throws, naming the rule and the rate key, rather than shipping a
+  // plausible-looking but corrupted simulation.
+  function assertValidCoefficient(rule, key, value) {
+    if (!Number.isFinite(value)) {
+      throw new RangeError('rule ' + rule.id + ': rate "' + key + '" coefficient must be a '
+        + 'finite number (got ' + value + '); NaN/Infinity would silently corrupt every '
+        + 'plate appearance');
+    }
+    if (value <= 0) {
+      throw new RangeError('rule ' + rule.id + ': rate "' + key + '" coefficient must be '
+        + 'greater than 0 (got ' + value + '); zero would delete the "' + key + '" event '
+        + 'type entirely, and a negative value would run the probability accumulator '
+        + 'backwards');
+    }
+  }
+
+  // The pure composition step. Multipliers compose by multiplication, which
+  // is associative and commutative -- that is what makes a hand-picked
+  // selection independent of the order the rules were selected in. This
+  // function must never sort its input: rules-resolve.test.js calls it
+  // directly with forward, reversed and shuffled orderings of the same
+  // selection and asserts all three land on the same, independently
+  // computed product. Sorting here (the way resolve() sorts for display)
+  // would make that check pass even if composition were not actually
+  // order-independent, which is exactly the gap that let an additive
+  // coefficient go untested before this function existed.
+  function composeModifiers(ruleList) {
+    const modifiers = identityMods();
+    const declared = [];
+    const structural = {};
+
+    for (const r of ruleList) {
+      if (r.tier === 'C') {
+        declared.push({ id: r.id, name: r.name, year: r.year, reason: declinedReason(r) });
+        continue;
+      }
+      if (r.tier === 'B' && r.rates) {
+        for (const k of RATE_KEYS) {
+          if (typeof r.rates[k] !== 'number') continue;
+          assertValidCoefficient(r, k, r.rates[k]);
+          modifiers[k] *= r.rates[k];
+        }
+      }
+      // Tier A structural settings land here in phase 2.
+    }
+
+    return { modifiers, declared, structural };
+  }
+
   function resolve(selection) {
     const sel = selection || {};
     let active;
     if (Array.isArray(sel.ids)) {
-      active = sel.ids.map((id) => {
+      const uniqueIds = Array.from(new Set(sel.ids));
+      active = uniqueIds.map((id) => {
         const r = BY_ID.get(id);
         if (!r) throw new Error('unknown rule id: ' + id);
         return r;
@@ -1755,27 +1808,18 @@
       active = forYear(sel.year).active;
     }
 
-    const modifiers = identityMods();
-    const declared = [];
-    const structural = {};
+    const { modifiers, declared, structural } = composeModifiers(active);
 
-    for (const r of active) {
-      if (r.tier === 'C') {
-        declared.push({ id: r.id, name: r.name, year: r.year, reason: declinedReason(r) });
-        continue;
-      }
-      if (r.tier === 'B' && r.rates) {
-        for (const k of RATE_KEYS) {
-          if (typeof r.rates[k] === 'number') modifiers[k] *= r.rates[k];
-        }
-      }
-      // Tier A structural settings land here in phase 2.
-    }
-
-    return { ids: active.map((r) => r.id), structural, modifiers, declared };
+    // Phase 1 does not fill either seam: no catalog rule carries a
+    // structural setting yet, and no advancement threshold is
+    // rule-addressed yet. Both keys are present and empty so sim.js's
+    // per-key tunables lookup (which falls back to the historical default
+    // for any absent key) and a later phase's structural consumer both see
+    // a stable, always-present shape.
+    return { ids: active.map((r) => r.id), structural, tunables: {}, modifiers, declared };
   }
 
-  const API = { CATALOG, TIERS, byId, forYear, resolve, RATE_KEYS };
+  const API = { CATALOG, TIERS, byId, forYear, resolve, composeModifiers, RATE_KEYS };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
   else global.MBB_RULES = API;
 })(typeof window !== 'undefined' ? window : globalThis);

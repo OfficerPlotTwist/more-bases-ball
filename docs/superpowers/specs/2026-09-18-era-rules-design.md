@@ -40,7 +40,7 @@ research scratchpad as part of phase 1).
 
 69 carry a quantified effect. 58 are modelable per plate appearance, 25
 partially, 29 not at all. The intersection — quantified **and** modelable — is
-**48 rules**, and those are the ones that get coefficients.
+**43 rules**, and those are the ones that get coefficients.
 
 ## 2. The three tiers
 
@@ -56,10 +56,10 @@ partition.
 
 | Rule | Year | Implementation |
 |---|---|---|
-| Innings per game | various | `cfg.innings`, already wired (`sim.js:207`) |
-| Outs per inning | various | `cfg.outs`, already wired (`sim.js:133`) |
-| Lineup length | various | `side.lineup.length` is already generic (`sim.js:134`) |
-| All runs count on a game-ending HR | 1920 | walkoff branch, `sim.js:178` |
+| Innings per game | various | `cfg.innings`, already wired (`sim.js:259`) |
+| Outs per inning | various | `cfg.outs`, already wired (`sim.js:185`) |
+| Lineup length | various | `side.lineup.length` is already generic (`sim.js:186`) |
+| All runs count on a game-ending HR | 1920 | walkoff branch, `sim.js:229` |
 | Automatic runner on second in extras | 2020 | state init at top of `playHalfInning` |
 | Seven-inning doubleheaders | 2020 | `cfg.innings = 7` |
 | Designated hitter | 1973 AL / 2022 all | lineup-slot substitution, §4.3 |
@@ -72,7 +72,7 @@ batter when `ctx.inning > cfg.innings`. `ctx` already carries `inning`
 
 ### Tier B — rate perturbation (43 rules)
 
-`adjustedRates(p, deltaFt)` at `sim.js:37-55` is already a complete, tested,
+`adjustedRates(p, deltaFt)` at `sim.js:55-73` is already a complete, tested,
 documented rate-perturbation engine. It serves exactly one rule (mound
 distance) and it is the template for all of Tier B: take the batter's season
 rates, apply multipliers to `{bb, k, s1, d2, d3, hr}`, renormalize under the
@@ -319,7 +319,7 @@ estimate is demoted to Tier C rather than given a guessed coefficient.
 
 ## 6. Testing
 
-Five new files, joining the existing 22.
+Three new files, joining the existing 22.
 
 ### `tests/rules-identity.test.js` — the freeze guard
 
@@ -387,7 +387,7 @@ ball, 1931 deadened ball, 1963 zone, 1969 mound+zone pair, 1973 DH, 2001
 QuesTec, 2022 universal DH, 2023 shift ban). Exit: calibration test green at
 2σ for all twelve.
 
-**Phase 3 — the remaining 36 Tier B rules and the Tier C surface.**
+**Phase 3 — the remaining 31 Tier B rules and the Tier C surface.**
 Full timeline in the UI, every rule visible with its tier and sources.
 Exit: all 112 rules reachable from the UI, 27 test files pass.
 
