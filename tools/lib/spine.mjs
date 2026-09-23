@@ -293,6 +293,29 @@ export async function openSpine(dataDir = path.join(ROOT, 'data'), opts = {}) {
       return normaliseRows(rows);
     },
 
+    /* League totals for one season, summed across every club. The era-rules
+     * calibration harness reads this; nothing else may open the parquet
+     * directly, which is what keeps the storage layout swappable. */
+    async leagueLine(year) {
+      checkYear(year);
+      const rows = await db.all(`
+        SELECT
+          ${year} AS year,
+          COUNT(*)                       AS clubs,
+          SUM(g) AS g, SUM(r) AS r, SUM(ra) AS ra, SUM(ab) AS ab,
+          SUM(h) AS h, SUM(d2) AS d2, SUM(d3) AS d3, SUM(hr) AS hr,
+          SUM(bb) AS bb, SUM(so) AS so, SUM(pa) AS pa,
+          SUM(hbp) AS hbp, SUM(sf) AS sf, SUM(sb) AS sb,
+          SUM(cs) AS cs, SUM(gidp) AS gidp
+        FROM read_parquet('${league}')
+        WHERE year = ${year}
+      `);
+      if (!rows.length || Number(rows[0].clubs) === 0) {
+        throw new Error(`spine: no league rows for ${year}`);
+      }
+      return normaliseRow(rows[0]);
+    },
+
     /* The denominator for effect-size ranking: how much this rate really moves
      * between consecutive seasons. A rule that shifts runs/game by 3 sigma
      * moved it further than any two real seasons ever did. Team-season

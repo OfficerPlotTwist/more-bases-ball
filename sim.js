@@ -17,7 +17,7 @@
     };
   }
 
-  const DEFAULT_CFG = { bases: 3, innings: 9, outs: 3 };
+  const DEFAULT_CFG = { bases: 3, innings: 9, outs: 3, rules: null };
 
   /* Mound-distance adjustment, per foot the rubber sits behind regulation
    * 60.5 ft (negative = closer, pitcher-friendly). Calibrated from:
@@ -33,6 +33,24 @@
    * BB -4% relative (the counterintuitive but observed AL result).
    */
   const MOUND_REG_FT = 60.5;
+
+  /* The four advancement constants below were bare literals. A rule may
+   * address them by name; absent a rule they keep their original values,
+   * and -- critically -- the number of rnd() draws never changes either
+   * way. Only the comparison thresholds move. */
+  const TUNABLE_DEFAULTS = Object.freeze({
+    stretch1B: 0.32, stretch2B: 0.22, sacFly: 0.26, doublePlay: 0.13,
+  });
+
+  function tunables(rules) {
+    const t = rules && rules.tunables;
+    if (!t) return TUNABLE_DEFAULTS;
+    const out = {};
+    for (const k of Object.keys(TUNABLE_DEFAULTS)) {
+      out[k] = typeof t[k] === 'number' ? t[k] : TUNABLE_DEFAULTS[k];
+    }
+    return out;
+  }
 
   function adjustedRates(p, deltaFt) {
     const singles = p.h - p.d2 - p.d3 - p.hr;
@@ -54,12 +72,44 @@
     return { bb, hr, d3, d2, s1, k: Math.max(0.02, k) };
   }
 
+  /* Apply a composed set of rate multipliers, then the same two clamps
+   * adjustedRates uses: keep the non-out share under 92% so a half-inning
+   * can always end, and leave at least 2% strikeouts. Returns a new
+   * object; the caller's rates are not touched. */
+  function applyModifiers(rates, mods) {
+    const m = mods || {};
+    const mul = (k) => (typeof m[k] === 'number' ? m[k] : 1);
+    let bb = rates.bb * mul('bb');
+    let hr = rates.hr * mul('hr');
+    let d3 = rates.d3 * mul('d3');
+    let d2 = rates.d2 * mul('d2');
+    let s1 = rates.s1 * mul('s1');
+    let k = rates.k * mul('k');
+    const nonOut = bb + hr + d3 + d2 + s1;
+    if (nonOut > 0.92) {
+      const scale = 0.92 / nonOut;
+      bb *= scale; hr *= scale; d3 *= scale; d2 *= scale; s1 *= scale;
+    }
+    k = Math.min(k, 1 - (bb + hr + d3 + d2 + s1) - 0.02);
+    return { bb, hr, d3, d2, s1, k: Math.max(0.02, k) };
+  }
+
   // Chance a plate appearance ends in BB / HR / 3B / 2B / 1B, straight
   // from the player's real season rates; `moundDeltaFt` (optional) shifts
   // them for a non-regulation mound. Anything left over is an out.
-  function plateAppearance(p, rnd, moundDeltaFt) {
-    if (moundDeltaFt) {
-      const a = adjustedRates(p, moundDeltaFt);
+  function plateAppearance(p, rnd, moundDeltaFt, rules) {
+    const mods = rules && rules.modifiers;
+    const hasMods = !!mods && Object.keys(mods).some((k) => mods[k] !== 1);
+    if (moundDeltaFt || hasMods) {
+      let a = moundDeltaFt ? adjustedRates(p, moundDeltaFt) : {
+        bb: p.bb / p.pa,
+        hr: p.hr / p.pa,
+        d3: p.d3 / p.pa,
+        d2: p.d2 / p.pa,
+        s1: (p.h - p.d2 - p.d3 - p.hr) / p.pa,
+        k: p.so / p.pa,
+      };
+      if (hasMods) a = applyModifiers(a, mods);
       const events = [
         ['BB', a.bb], ['HR', a.hr], ['3B', a.d3], ['2B', a.d2], ['1B', a.s1],
       ];
@@ -90,10 +140,11 @@
 
   // Move everyone up on a hit. All runners take the same number of bases as
   // the batter, sometimes stretching one extra on singles/doubles.
-  function hitAdvance(bases, batter, hitValue, rnd) {
+  function hitAdvance(bases, batter, hitValue, rnd, rules) {
     const B = bases.length;
+    const t = tunables(rules);
     const stretch =
-      (hitValue === 1 && rnd() < 0.32) || (hitValue === 2 && rnd() < 0.22) ? 1 : 0;
+      (hitValue === 1 && rnd() < t.stretch1B) || (hitValue === 2 && rnd() < t.stretch2B) ? 1 : 0;
     const next = new Array(B).fill(null);
     let runs = 0;
     const scorers = [];
@@ -110,7 +161,7 @@
   }
 
   // Walk: batter to first, runners advance only if forced.
-  function walkAdvance(bases, batter) {
+  function walkAdvance(bases, batter, rules) {
     const next = bases.slice();
     let carry = batter, i = 0, runs = 0;
     const scorers = [];
@@ -125,6 +176,7 @@
   }
 
   function playHalfInning(side, cfg, rnd, log, ctx) {
+    const t = tunables(cfg.rules);
     let outs = 0;
     let runs = 0;
     let bases = new Array(cfg.bases).fill(null);
@@ -133,7 +185,7 @@
     while (outs < cfg.outs) {
       const batter = side.lineup[side.spot % side.lineup.length];
       side.spot++;
-      const type = plateAppearance(batter, rnd);
+      const type = plateAppearance(batter, rnd, 0, cfg.rules);
       const entry = {
         inning: ctx.inning, half: ctx.half, team: side.abbr,
         batter: batter.name, pos: batter.pos, type, sub: null,
@@ -141,11 +193,11 @@
       };
 
       if (type === 'BB') {
-        const res = walkAdvance(bases, batter);
+        const res = walkAdvance(bases, batter, cfg.rules);
         bases = res.bases; entry.runs = res.runs; entry.scorers = res.scorers;
       } else if (type === '1B' || type === '2B' || type === '3B' || type === 'HR') {
         const value = type === 'HR' ? cfg.bases + 1 : Number(type[0]);
-        const res = hitAdvance(bases, batter, value, rnd);
+        const res = hitAdvance(bases, batter, value, rnd, cfg.rules);
         bases = res.bases; entry.runs = res.runs; entry.scorers = res.scorers;
         // With few bases a long hit clears home on its own legs.
         if (type !== 'HR' && value > cfg.bases) entry.sub = 'ITP';
@@ -155,12 +207,12 @@
         outs++;
       } else { // OUT: ball in play
         outs++;
-        if (bases[lastBase] && outs < cfg.outs && rnd() < 0.26) {
+        if (bases[lastBase] && outs < cfg.outs && rnd() < t.sacFly) {
           entry.sub = 'SF';
           entry.runs = 1;
           entry.scorers = [bases[lastBase].name];
           bases = bases.slice(); bases[lastBase] = null;
-        } else if (bases[0] && outs < cfg.outs && rnd() < 0.13) {
+        } else if (bases[0] && outs < cfg.outs && rnd() < t.doublePlay) {
           entry.sub = 'DP';
           outs++;
           bases = bases.slice(); bases[0] = null;
@@ -277,8 +329,8 @@
   }
 
   const API = {
-    simGame, simMany, scanBases, plateAppearance, adjustedRates,
-    mulberry32, DEFAULT_CFG, MOUND_REG_FT,
+    simGame, simMany, scanBases, plateAppearance, adjustedRates, applyModifiers,
+    mulberry32, DEFAULT_CFG, MOUND_REG_FT, tunables,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
   else global.MBB_SIM = API;

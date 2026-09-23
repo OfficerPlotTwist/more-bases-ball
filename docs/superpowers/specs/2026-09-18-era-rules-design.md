@@ -40,23 +40,26 @@ research scratchpad as part of phase 1).
 
 69 carry a quantified effect. 58 are modelable per plate appearance, 25
 partially, 29 not at all. The intersection — quantified **and** modelable — is
-**48 rules**, and those are the ones that get coefficients.
+**43 rules**, and those are the ones that get coefficients.
 
 ## 2. The three tiers
 
 The engine's own structure sorts the catalog. Tiers are a property of what
 moreBasesBall can represent, not of how important a rule was.
 
-### Tier A — structural (7 rules)
+### Tier A — structural (5 catalog rules)
 
-Expressible as game state or config. No rate math.
+Expressible as game state, not as a rate. The first three rows below are
+existing engine knobs rather than catalog entries — they are listed because an
+era bundle sets them, but they are not among the 112 and are not counted in the
+partition.
 
 | Rule | Year | Implementation |
 |---|---|---|
-| Innings per game | various | `cfg.innings`, already wired (`sim.js:207`) |
-| Outs per inning | various | `cfg.outs`, already wired (`sim.js:133`) |
-| Lineup length | various | `side.lineup.length` is already generic (`sim.js:134`) |
-| All runs count on a game-ending HR | 1920 | walkoff branch, `sim.js:178` |
+| Innings per game | various | `cfg.innings`, already wired (`sim.js:259`) |
+| Outs per inning | various | `cfg.outs`, already wired (`sim.js:185`) |
+| Lineup length | various | `side.lineup.length` is already generic (`sim.js:186`) |
+| All runs count on a game-ending HR | 1920 | walkoff branch, `sim.js:229` |
 | Automatic runner on second in extras | 2020 | state init at top of `playHalfInning` |
 | Seven-inning doubleheaders | 2020 | `cfg.innings = 7` |
 | Designated hitter | 1973 AL / 2022 all | lineup-slot substitution, §4.3 |
@@ -67,9 +70,9 @@ batter when `ctx.inning > cfg.innings`. `ctx` already carries `inning`
 (`sim.js:201`) and `side.spot` (`sim.js:185`) identifies the batter. It costs
 **zero** new random draws, so it cannot perturb the stream.
 
-### Tier B — rate perturbation (48 rules)
+### Tier B — rate perturbation (43 rules)
 
-`adjustedRates(p, deltaFt)` at `sim.js:37-55` is already a complete, tested,
+`adjustedRates(p, deltaFt)` at `sim.js:55-73` is already a complete, tested,
 documented rate-perturbation engine. It serves exactly one rule (mound
 distance) and it is the template for all of Tier B: take the batter's season
 rates, apply multipliers to `{bb, k, s1, d2, d3, hr}`, renormalize under the
@@ -81,12 +84,20 @@ scoring-relevant era rules — the 1880→1889 walk-count ladder, 1893's rubber,
 1969 zone changes, 1969 mound, 2001 QuesTec, 2021 sticky stuff — are the same
 shape, differing only in which of the six rates they move and by how much.
 
-### Tier C — declared, not simulated (29 rules)
+### Tier C — declared, not simulated (64 rules)
 
 Replay, mound-visit limits, pine tar, pitch timers, the reserve clause, the
 1965 draft, postseason structure. These ship in the catalog and appear in the
 UI marked **in effect · no simulated effect**, each with the reason it cannot
 be modeled.
+
+Tier C is larger than it first looks, and the breakdown matters: 29 rules are
+flatly unmodelable per plate appearance, 25 are partially modelable (the engine
+can represent some of what they changed but not all), and 10 are modelable in
+principle but were never quantified by any source. That last group is the one
+worth re-reading later — each is a rule the engine could carry if someone finds
+the numbers. Tiers partition the catalog exactly: 5 + 43 + 64 = 112, asserted by
+`tests/rules-catalog.test.js`.
 
 This is deliberate and follows the precedent AGENTS.md sets for
 `coverage.json`: *never omit an unavailable KPI — an absent key reads as "not a
@@ -366,7 +377,7 @@ scrolling body, capped like `.pbp-panel` at 360px on phones.
 `rules.js` with all 112 rules; catalog committed to
 `docs/decisions/2026-09-18-era-rules/`; `leagueLine()` added to `spine.mjs`;
 `tests/rules-identity.test.js` green with rules off; engine parameters appended
-but every default taking the legacy branch. Exit: 23 test files pass (22 existing plus the identity
+but every default taking the legacy branch. Exit: 25 test files pass (22 existing plus catalog, resolve and identity
 guard), and the identity fixtures prove the engine is untouched in its default configuration.
 
 **Phase 2 — Tier A plus the 12 largest Tier B rules.**
@@ -376,9 +387,9 @@ ball, 1931 deadened ball, 1963 zone, 1969 mound+zone pair, 1973 DH, 2001
 QuesTec, 2022 universal DH, 2023 shift ban). Exit: calibration test green at
 2σ for all twelve.
 
-**Phase 3 — the remaining 36 Tier B rules and the Tier C surface.**
+**Phase 3 — the remaining 31 Tier B rules and the Tier C surface.**
 Full timeline in the UI, every rule visible with its tier and sources.
-Exit: all 112 rules reachable from the UI, 25 test files pass.
+Exit: all 112 rules reachable from the UI, 27 test files pass.
 
 ## 9. What this explicitly does not do
 

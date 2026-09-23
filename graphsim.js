@@ -665,7 +665,7 @@
   function playHalf(side, layout, paths, slots, cfg, rnd, log, ctx) {
     let outs = 0, runs = 0;
     const occ = new Map();
-    const geo = { layout, rnd };
+    const geo = { layout, rnd, rules: cfg.rules || null };
 
     while (outs < cfg.outs) {
       const batter = side.lineup[side.spot % side.lineup.length];
@@ -673,7 +673,7 @@
       const plate = layout.homes[side.plateIdx % 3].id;
       side.plateIdx++;
       const target = L.targetOf(layout, plate);
-      const type = CORE.plateAppearance(batter, rnd, ctx.moundDelta);
+      const type = CORE.plateAppearance(batter, rnd, ctx.moundDelta, cfg.rules || null);
       const entry = {
         inning: ctx.inning, half: ctx.half, team: side.abbr,
         batter: batter.name, pos: batter.pos, plate, type, sub: null,
