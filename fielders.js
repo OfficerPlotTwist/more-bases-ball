@@ -302,10 +302,54 @@
     return (assign.coverers.find((c) => c.node === nodeId) || null);
   }
 
+  /* ---- fielding difficulty -------------------------------------------
+   * Both functions are PURE: numbers in, a number out, no rnd. The
+   * sampling lives in graphsim.js, which already owns every random draw
+   * in the defense. That is what keeps the "No randomness anywhere"
+   * contract above true, and tests/fielders.test.js and
+   * tests/defense-stress.test.js both depend on it.
+   *
+   * `slack` is seconds to spare: the ball's hang time minus the time the
+   * fielder needs to reach it. Positive means he is waiting for it.
+   */
+  const CATCH_K = 5.2;        // pinned by the observed 5-star catch rate
+  const ORDINARY_S = 0.25;    // below this, Rule 9.12 forbids an error
+  const MUFF_DECAY_S = 0.90;  // how fast a routine play gets safe
+
+  /* Probability he comes up with it. Anchored on Statcast's published
+   * 5-star bands (5* = 0-25% caught, 4* = 26-50%, 3* = 51-75%, 2* =
+   * 76-90%, 1* = 91-95%) and on the one hard figure published: 192 of
+   * 2688 five-star chances were caught in 2025, 7.1%. CATCH_K = 5.2 is
+   * chosen so slack = -0.5s lands on that 7.1%. A failure here is a HIT.
+   */
+  function catchChance(slack) {
+    if (typeof slack !== 'number' || Number.isNaN(slack)) return 0;
+    if (slack === Infinity) return 1;
+    if (slack === -Infinity) return 0;
+    return 1 / (1 + Math.exp(-CATCH_K * slack));
+  }
+
+  /* Probability he butchers a play he actually had. Zero below ordinary
+   * effort: MLB Rule 9.12 charges an error only where ordinary effort
+   * would have made the play, so a failure on anything harder is scored
+   * a hit and never an error. That gate is why this curve is not simply
+   * the inverse of catchChance -- real errors concentrate at the EASY
+   * end. Above the gate the risk is highest right at the edge of
+   * ordinary effort and decays as the play gets more routine.
+   * A failure here is an ERROR.
+   */
+  function muffChance(slack, e0) {
+    if (typeof e0 !== 'number' || !Number.isFinite(e0) || e0 <= 0) return 0;
+    if (typeof slack !== 'number' || !Number.isFinite(slack)) return 0;
+    if (slack < ORDINARY_S) return 0;
+    return e0 * Math.exp(-(slack - ORDINARY_S) / MUFF_DECAY_S);
+  }
+
   const API = {
     FIELD_FTS, POOL, DEEP, SHALLOW, OF_DEPTH_FT, CATCHER_FT,
     finite, fairWedges, angleInSpans, WEDGE,
     fielderSlots, assignPlay, covererFor, travelSec, splitEvenly,
+    catchChance, muffChance, CATCH_K, ORDINARY_S, MUFF_DECAY_S,
   };
   if (IS_NODE) module.exports = API;
   else global.MBB_FIELDERS = API;
