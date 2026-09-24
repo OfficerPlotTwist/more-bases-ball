@@ -816,9 +816,6 @@
 
   const API = {
     simGameGraph, simManyGraph,
-    // exposed directly so tests can assert on its signature (arity) without
-    // reaching into _internals
-    resolveBallOut,
     // shared machinery for the tri-pitch engine
     _internals: {
       advanceRunners, batterAdvance, walkAdvance, pushInto, makeSide, sideResult,

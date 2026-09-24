@@ -123,8 +123,9 @@ check('tri engine: errors:null is identical to no errors key', triMoved === 0,
   triMoved ? `${triMoved} seed(s) diverged` : '');
 
 // The 12th parameter must exist so later tasks can use it.
-check('resolveBallOut accepts a 12th parameter', G.resolveBallOut.length === 12,
-  `arity ${G.resolveBallOut.length}`);
+check('resolveBallOut accepts a 12th parameter',
+  G._internals.resolveBallOut.length === 12,
+  `arity ${G._internals.resolveBallOut.length}`);
 
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);
