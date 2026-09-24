@@ -85,5 +85,46 @@ for (const s of [-200, -50, 50, 200]) {
 }
 check('extreme layouts keep both curves in range', extremeOk);
 
+// ---- the flag reaches the engines without changing anything ----
+const { TEAMS } = require(path.join(__dirname, '..', 'data.js'));
+const L = require(path.join(__dirname, '..', 'layout.js'));
+const G = require(path.join(__dirname, '..', 'graphsim.js'));
+const T = require(path.join(__dirname, '..', 'trisim.js'));
+
+const LAD = TEAMS[0], NYY = TEAMS[1];
+const ring = L.makeStarter(250);
+
+function graphBox(cfg, seed) {
+  const g = G.simGameGraph(NYY, LAD, ring, cfg, seed);
+  return JSON.stringify({
+    away: g.away, home: g.home, winner: g.winner, innings: g.innings,
+    plays: g.log.map((e) => [e.type, e.sub, e.runs, e.outsAfter]),
+  });
+}
+function triBox(cfg, seed) {
+  const g = T.simGameTri(NYY, LAD, ring, cfg, seed);
+  return JSON.stringify({
+    away: g.away, home: g.home, winner: g.winner, innings: g.innings,
+    plays: g.log.map((e) => [e.type, e.sub, e.runs, e.outsAfter]),
+  });
+}
+
+const SEEDS = [7, 42, 99, 1234, 20260924];
+const BASE = { innings: 9, outs: 3 };
+
+let graphMoved = 0, triMoved = 0;
+for (const seed of SEEDS) {
+  if (graphBox(BASE, seed) !== graphBox(Object.assign({}, BASE, { errors: null }), seed)) graphMoved++;
+  if (triBox(BASE, seed) !== triBox(Object.assign({}, BASE, { errors: null }), seed)) triMoved++;
+}
+check('graph engine: errors:null is identical to no errors key', graphMoved === 0,
+  graphMoved ? `${graphMoved} seed(s) diverged` : '');
+check('tri engine: errors:null is identical to no errors key', triMoved === 0,
+  triMoved ? `${triMoved} seed(s) diverged` : '');
+
+// The 12th parameter must exist so later tasks can use it.
+check('resolveBallOut accepts a 12th parameter', G.resolveBallOut.length === 12,
+  `arity ${G.resolveBallOut.length}`);
+
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

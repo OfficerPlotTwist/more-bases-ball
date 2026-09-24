@@ -154,7 +154,7 @@
         } else { // ball in play, defense picks the best geometric play
           entry.contact = contactFor(layout, plate, 'OUT', rnd);
           outs += resolveBallOut(occ, batter, plate, target, layout, paths, entry,
-            rnd, canMove, entry.contact, slots);
+            rnd, canMove, entry.contact, slots, cfg.errors || null);
         }
 
         runs += entry.runs;

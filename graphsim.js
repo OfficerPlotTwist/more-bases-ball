@@ -278,7 +278,7 @@
    * `slots` is the standing alignment (fielders.js); it is computed once per
    * game and passed down, but callers may omit it.
    */
-  function resolveBallOut(occ, batter, plate, target, layout, paths, entry, rnd, canMove, contact, slots) {
+  function resolveBallOut(occ, batter, plate, target, layout, paths, entry, rnd, canMove, contact, slots, errCfg) {
     const D = slots || F.fielderSlots(layout);
     const grounder = contact.distFt < 150; // infield ball: runners are forced off
     const bs = L.batterStart(layout, paths, plate, target);
@@ -715,7 +715,7 @@
       } else { // ball in play, defense picks the best play
         entry.contact = contactFor(layout, plate, 'OUT', rnd);
         outs += resolveBallOut(occ, batter, plate, target, layout, paths, entry,
-          rnd, () => true, entry.contact, slots);
+          rnd, () => true, entry.contact, slots, cfg.errors || null);
       }
 
       runs += entry.runs;
@@ -816,6 +816,9 @@
 
   const API = {
     simGameGraph, simManyGraph,
+    // exposed directly so tests can assert on its signature (arity) without
+    // reaching into _internals
+    resolveBallOut,
     // shared machinery for the tri-pitch engine
     _internals: {
       advanceRunners, batterAdvance, walkAdvance, pushInto, makeSide, sideResult,
