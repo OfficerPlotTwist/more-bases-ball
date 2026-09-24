@@ -299,6 +299,15 @@
     const bags = [...new Set(exposed.map((e) => e.nx).concat(bs ? [bs.first] : []))];
     const assign = F.assignPlay(layout, D, contact, bags);
 
+    /* How many seconds the fielder has to spare. This is the same number
+     * the old binary catch test compared against zero, kept instead of
+     * thrown away: Statcast catch probability is built on exactly this,
+     * ground to cover against time available. It sits here, above tCatch,
+     * because a muffed play adds time to tCatch and so has to be decided
+     * first. */
+    const hangSec = contact.distFt / HIT_FTS;
+    const slack = hangSec - assign.tReach;
+
     // the ball is not fielded when it lands — it is fielded when somebody
     // gets to it, so a shot into the gap between two fielders hangs there
     const tCatch = Math.max(contact.distFt / HIT_FTS, assign.tReach) + GLOVE_S;
@@ -346,7 +355,9 @@
      * completely — which is the difference between a fly ball and a ground
      * ball as far as the runners are concerned.
      */
-    const caught = !grounder && assign.tReach <= contact.distFt / HIT_FTS;
+    const caught = !grounder && (errCfg
+      ? rnd() < F.catchChance(slack)
+      : assign.tReach <= hangSec);
 
     /* Who is forced. The batter is running at `bs.first`, so whoever is
      * standing there has to vacate, which forces whoever is standing at

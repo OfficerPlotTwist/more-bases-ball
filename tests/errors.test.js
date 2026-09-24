@@ -1,5 +1,6 @@
 /* Fielding errors. Run: node tests/errors.test.js */
 'use strict';
+const fs = require('fs');
 const path = require('path');
 const F = require(path.join(__dirname, '..', 'fielders.js'));
 
@@ -126,6 +127,40 @@ check('tri engine: errors:null is identical to no errors key', triMoved === 0,
 check('resolveBallOut accepts a 12th parameter',
   G._internals.resolveBallOut.length === 12,
   `arity ${G._internals.resolveBallOut.length}`);
+
+// ---- the committed baseline: errors OFF must reproduce it exactly ----
+// Captured at 9373172b, before catch sampling existed. This is the check
+// the errors:null-vs-absent comparison could not be: both of those pass
+// the identical null through `cfg.errors || null`, so that one asserts
+// null === null. If a box below moves while errors are off, a draw is
+// being consumed that was not consumed before.
+const golden = JSON.parse(
+  fs.readFileSync(path.join(__dirname, 'fixtures', 'defense-golden.json'), 'utf8'));
+
+let goldGraph = 0, goldTri = 0, goldN = 0;
+for (const seed of Object.keys(golden.graph)) {
+  goldN++;
+  if (graphBox(BASE, Number(seed)) !== golden.graph[seed]) goldGraph++;
+  if (triBox(BASE, Number(seed)) !== golden.tri[seed]) goldTri++;
+}
+check(`graph engine reproduces all ${goldN} baseline boxes with errors off`,
+  goldGraph === 0, goldGraph ? `${goldGraph} diverged` : `from ${golden.generatedFrom.slice(0, 8)}`);
+check(`tri engine reproduces all ${goldN} baseline boxes with errors off`,
+  goldTri === 0, goldTri ? `${goldTri} diverged` : '');
+
+// ---- catch sampling changes outcomes only when enabled ----
+const ON = Object.assign({}, BASE, { errors: { e0: 0.05 } });
+let onMoved = 0;
+for (const seed of SEEDS) {
+  if (graphBox(BASE, seed) !== graphBox(ON, seed)) onMoved++;
+}
+check('graph engine: enabling errors DOES change the game (wiring is real)',
+  onMoved > 0, `${onMoved}/${SEEDS.length} seed(s) diverged`);
+
+check('graph engine: errors on is still seed-reproducible',
+  graphBox(ON, 7) === graphBox(ON, 7));
+check('tri engine: errors on is still seed-reproducible',
+  triBox(ON, 7) === triBox(ON, 7));
 
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);
