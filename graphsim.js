@@ -69,6 +69,17 @@
    * not runs allowed, so this number changes how much an error hurts
    * rather than how often one happens. */
   const BOBBLE_S = 0.8;
+
+  /* Fitted so the graph engine charges 0.53 errors per team-game, the
+   * 2024 league rate (0.52 in 2023, a record low). Measured over 2000
+   * games on the 250ft starter ring; tests/errors.test.js re-measures it
+   * and fails outside 0.48-0.58.
+   *
+   * The historical arc is steep and deliberately NOT modelled here:
+   * 3.04 errors per team-game in 1894, 1.71 in 1908, 1.5 in 1917, 0.53
+   * today. That is glove and groundskeeping history and it belongs to
+   * the era-rules layer as a rule that scales this constant. */
+  const ERROR_E0 = 0.113;
   // Beyond this the ball goes through a cutoff man rather than on the fly.
   const RELAY_AT = 200, RELAY_S = 0.55, RELAY_SPEED = 0.85;
 
@@ -849,7 +860,7 @@
   }
 
   const API = {
-    simGameGraph, simManyGraph,
+    simGameGraph, simManyGraph, ERROR_E0, BOBBLE_S,
     // shared machinery for the tri-pitch engine
     _internals: {
       advanceRunners, batterAdvance, walkAdvance, pushInto, makeSide, sideResult,

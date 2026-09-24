@@ -235,5 +235,27 @@ check('...and actually produced logged plays (the check above is not vacuous)',
   survived && !!platesOnlyGame && platesOnlyGame.log.length > 0,
   survived && platesOnlyGame ? `${platesOnlyGame.log.length} plays` : 'n/a');
 
+// ---- calibration: 0.53 errors per team-game, +/- 0.05 ----
+// Target and tolerance from the spec: 0.53 is the 2024 league rate
+// (0.52 in 2023). The band is 4.3 sigma of Monte Carlo noise at 2000
+// games and wider than the league's own 2022-2024 spread, so it will
+// not flap but would catch a real miscalibration.
+const CAL_GAMES = 2000;
+let calErrs = 0;
+for (let seed = 1; seed <= CAL_GAMES; seed++) {
+  const g = G.simGameGraph(NYY, LAD, ring, {
+    innings: 9, outs: 3, errors: { e0: G.ERROR_E0 },
+  }, seed);
+  for (const e of g.log) if (e.sub === 'E') calErrs++;
+}
+const perTeamGame = calErrs / (CAL_GAMES * 2);
+check('errors per team-game is 0.53 +/- 0.05',
+  perTeamGame >= 0.48 && perTeamGame <= 0.58,
+  `${perTeamGame.toFixed(3)} (${calErrs} errors in ${CAL_GAMES * 2} team-games)`);
+
+check('ERROR_E0 is a finite positive number',
+  typeof G.ERROR_E0 === 'number' && Number.isFinite(G.ERROR_E0) && G.ERROR_E0 > 0,
+  `${G.ERROR_E0}`);
+
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);
