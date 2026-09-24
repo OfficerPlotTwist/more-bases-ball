@@ -61,6 +61,14 @@
   // securing the ball once you have run it down, and the transfer out of
   // the glove before the throw
   const GLOVE_S = 0.15, TRANSFER_S = 0.3;
+  /* What a muff costs in seconds. No base-advancement distribution for
+   * errors was sourceable, so none is invented: a botched play simply
+   * costs the defense most of a second and the runners take whatever the
+   * existing margin machinery then gives them. Comparable in size to
+   * TRANSFER_S plus a re-gather. Calibration is against errors CHARGED,
+   * not runs allowed, so this number changes how much an error hurts
+   * rather than how often one happens. */
+  const BOBBLE_S = 0.8;
   // Beyond this the ball goes through a cutoff man rather than on the fly.
   const RELAY_AT = 200, RELAY_S = 0.55, RELAY_SPEED = 0.85;
 
@@ -308,9 +316,24 @@
     const hangSec = contact.distFt / HIT_FTS;
     const slack = hangSec - assign.tReach;
 
+    /* A grounder has no hang time, so its "routine-ness" is the seconds
+     * the defense has in hand at the batter's bag instead. Computed from
+     * the same pieces playTime uses, but without depending on tCatch --
+     * the bobble feeds tCatch, so this must be knowable first. Null when
+     * there is no bag to throw to, and muffChance treats null as zero. */
+    const groundSlack = (grounder && bs)
+      ? runSec(batter, ftBetween(posOf(layout, plate), posOf(layout, bs.first)), true)
+        - (assign.tReach + TRANSFER_S + throwSec(ftBetween(contact, posOf(layout, bs.first))))
+      : null;
+
+    const muffed = !!errCfg &&
+      rnd() < F.muffChance(grounder ? groundSlack : slack, errCfg.e0);
+    if (muffed) entry.sub = 'E';
+
     // the ball is not fielded when it lands — it is fielded when somebody
     // gets to it, so a shot into the gap between two fielders hangs there
-    const tCatch = Math.max(contact.distFt / HIT_FTS, assign.tReach) + GLOVE_S;
+    const tCatch = Math.max(contact.distFt / HIT_FTS, assign.tReach) + GLOVE_S
+      + (muffed ? BOBBLE_S : 0);
 
     // tSecure is the moment the defense actually has the ball, measured
     // from contact. The animation reads it back so the ball cannot leave

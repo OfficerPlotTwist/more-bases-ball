@@ -162,5 +162,78 @@ check('graph engine: errors on is still seed-reproducible',
 check('tri engine: errors on is still seed-reproducible',
   triBox(ON, 7) === triBox(ON, 7));
 
+// ---- errors are actually charged, and tagged ----
+function countSubs(cfg, seeds, tag) {
+  let n = 0, plays = 0;
+  for (const seed of seeds) {
+    const g = G.simGameGraph(NYY, LAD, ring, cfg, seed);
+    for (const e of g.log) { plays++; if (e.sub === tag) n++; }
+  }
+  return { n, plays };
+}
+
+const LOUD = Object.assign({}, BASE, { errors: { e0: 0.9 } });
+const loud = countSubs(LOUD, [1, 2, 3, 4, 5, 6, 7, 8], 'E');
+check('a high e0 charges errors, tagged E', loud.n > 0,
+  `${loud.n} error(s) in ${loud.plays} plays`);
+
+const none = countSubs(BASE, [1, 2, 3, 4, 5, 6, 7, 8], 'E');
+check('errors off charges none', none.n === 0, `${none.n}`);
+
+// Review Focus 5: enabled with a zero rate. No errors, but the draws
+// are still consumed, so the run stays reproducible from its seed.
+const ZERO = Object.assign({}, BASE, { errors: { e0: 0 } });
+const zero = countSubs(ZERO, [1, 2, 3, 4, 5, 6, 7, 8], 'E');
+check('e0 of 0 charges no error', zero.n === 0, `${zero.n}`);
+check('e0 of 0 is still seed-reproducible', graphBox(ZERO, 7) === graphBox(ZERO, 7));
+
+// Rule 9.12 as a property: an error is only ever charged on a play the
+// defense had time for. A charged error on a ball nobody could reach
+// would be a scoring impossibility.
+const bigE0 = Object.assign({}, BASE, { errors: { e0: 0.9 } });
+let impossible = 0, charged = 0, inspected = 0;
+for (let seed = 1; seed <= 25; seed++) {
+  const g = G.simGameGraph(NYY, LAD, ring, bigE0, seed);
+  for (const e of g.log) {
+    if (e.sub !== 'E') continue;
+    charged++;
+    // NOTE: tReach lives on entry.defense (graphsim.js:309-312), NOT on
+    // the entry itself. Reading e.tReach yields undefined, the guard
+    // below goes false for every play, and this check passes while
+    // asserting nothing. That is the failure mode this comment exists
+    // to prevent.
+    const d = e.defense;
+    if (e.contact && d && Number.isFinite(d.tReach)) {
+      inspected++;
+      const sl = e.contact.distFt / 110 - d.tReach;
+      const ground = e.contact.distFt < 150;
+      if (!ground && sl < F.ORDINARY_S) impossible++;
+    }
+  }
+}
+// The guard must actually have fired, or the check above is vacuous.
+check('Rule 9.12 check actually inspected some plays', inspected > 0,
+  `inspected ${inspected} of ${charged} charged`);
+check('no fly-ball error is charged below ordinary effort (Rule 9.12)',
+  impossible === 0, `${impossible} impossible of ${inspected} inspected`);
+
+// Review Focus 3: a layout with no batter start must not throw or NaN.
+// (Corrected per task-4 brief: assert the game actually produced plays
+// first, so a rejected/degenerate construction can't pass this check for
+// the wrong reason. The filtered layout below does produce plays -- it
+// was verified directly rather than swapped for a defense-stress layout.)
+const platesOnly = L.makeStarter(250);
+platesOnly.nodes = platesOnly.nodes.filter((n) => platesOnly.homes.some((h) => h.id === n.id));
+platesOnly.edges = [];
+let survived = true;
+let platesOnlyGame = null;
+try {
+  platesOnlyGame = G.simGameGraph(NYY, LAD, platesOnly, LOUD, 3);
+} catch (e) { survived = false; }
+check('a layout with no batter start survives errors being on', survived);
+check('...and actually produced logged plays (the check above is not vacuous)',
+  survived && !!platesOnlyGame && platesOnlyGame.log.length > 0,
+  survived && platesOnlyGame ? `${platesOnlyGame.log.length} plays` : 'n/a');
+
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);
