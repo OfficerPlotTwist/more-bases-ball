@@ -37,7 +37,7 @@ box score is byte-identical before and after.
 ## Tests
 
 `node tools/run-tests.mjs` (portable) or
-`for t in tests/*.test.js; do node $t; done` — all 22 files must pass.
+`for t in tests/*.test.js; do node $t; done` — all 26 files must pass.
 `tests/defense-stress.test.js` is the one to run after touching anything in
 `fielders.js` or `resolveBallOut`: it covers the awkward custom layouts.
 
@@ -78,6 +78,86 @@ were vanishing early, 0.54s on average.
 A player is four materials (body, head, contact shadow, name sprite). Fade
 them together via `setPlayerOpacity` — fading `userData.mat` alone leaves a
 solid head floating over a solid shadow.
+
+## Era rules (rules.js)
+
+`rules.js` is GENERATED. Rebuild it with `node tools/build-rules.mjs`; the
+source of truth is the committed catalog at
+`docs/decisions/2026-09-18-era-rules/rules-catalog.json` — 112 significant MLB
+rules changes, 1876-2026, from 27 sources. Hand-editing `rules.js` is how the
+two drift apart.
+
+Rules sort into three tiers and the tiers partition the catalog exactly
+(5 + 43 + 64 = 112, asserted by `tests/rules-catalog.test.js`):
+
+- **A, structural** — expressible as game state (ghost runner, DH, 7-inning
+  doubleheaders).
+- **B, rate** — a perturbation of the per-PA event distribution, applied
+  through `applyModifiers` in `sim.js` using the same clamps `adjustedRates`
+  already proved out.
+- **C, declared** — real, in effect, and not simulable here. These ship
+  VISIBLE rather than omitted, for the reason `coverage.json` never omits an
+  unavailable KPI: an absent entry reads as "this did not exist", which is a
+  different and wrong statement. 29 are flatly unmodelable, 25 partial, and
+  10 are modelable but were never quantified — only that last group is
+  shrinkable by later work.
+
+Every rule is a branch on a config value. `cfg.rules` is null by default and
+`hasMods` — not the mere presence of a rules object — is what diverts
+`plateAppearance` off the legacy path, so a fully loaded historical rule set
+with no coefficients is provably a no-op.
+
+Coefficients are validated finite and greater than zero at `resolve()` time,
+and that guard is not optional politeness: a NaN coefficient used to make
+every plate appearance an out with no error raised, and a negative one
+deleted an event type while the probability accumulator ran backwards.
+
+**`composeModifiers` must never sort its input.** Multipliers compose
+multiplicatively, and `tests/rules-resolve.test.js` proves order-independence
+by handing it forward, reversed and shuffled orderings of the same selection.
+An earlier version sorted inside `resolve()` before composing, which made that
+assertion unfalsifiable in any phase — it would have passed even against
+additive composition.
+
+Calibration asserts PROPORTIONAL deltas on a fixed modern player pool, never
+absolute historical levels. The sim cannot be 1968: most of the gap is
+players, not rules, and a single runs/game match would be a false positive
+because a knob can always be tuned to hit one number.
+
+## Fielding errors
+
+Errors come out of a margin the defense already computed. `resolveBallOut`
+subtracts the fielder's travel time from the ball's hang time; that difference
+is `slack`, and it used to be thresholded at zero and discarded.
+
+Two curves live in `fielders.js` as PURE functions — `catchChance(slack)` and
+`muffChance(slack, e0)`. All sampling stays in `graphsim.js`. That split is
+what keeps the "No randomness anywhere" contract on `assignPlay` true, and
+`tests/fielders.test.js` and `tests/defense-stress.test.js` both depend on it.
+
+The two curves are deliberately NOT inverses. MLB Rule 9.12 charges an error
+only where ordinary effort would have made the play, so a botched diving stop
+is a hit and a booted routine grounder is an error — real errors concentrate
+at the EASY end of the difficulty range. `catchChance` rises with slack and
+its failures are hits; `muffChance` is zero below `ORDINARY_S`, peaks there,
+and decays.
+
+**A muff must un-complete the play.** It is sampled only among plays the
+defense would otherwise have finished, and it makes them fail. An earlier
+version drew the muff independently and stapled the tag on afterwards, which
+charged errors on 1203 of 2195 balls the fielder CAUGHT and retired the batter
+on, left reached-on-error at structurally zero, and made `BOBBLE_S` inert at
+any value. Five task reviews passed that version; only measuring the outcomes
+caught it.
+
+`ERROR_E0` is fitted on the 250ft starter ring and the graph engine ONLY. The
+rate varies hard with field size (0.39 at 90ft, 0.01 at 400ft) because a big
+field makes everything routine. Do not read it as universal.
+
+Errors are behind `cfg.errors = { e0 }` and OFF by default.
+`tests/fixtures/defense-golden.json` holds 10 boxes captured before any of
+this existed; if one moves while errors are off, a draw is being consumed that
+was not consumed before.
 
 ## Data spine
 
