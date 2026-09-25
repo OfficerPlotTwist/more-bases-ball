@@ -61,6 +61,36 @@
   // securing the ball once you have run it down, and the transfer out of
   // the glove before the throw
   const GLOVE_S = 0.15, TRANSFER_S = 0.3;
+  /* What a muff costs in seconds. No base-advancement distribution for
+   * errors was sourceable, so none is invented: a botched play simply
+   * costs the defense most of a second and the runners take whatever the
+   * existing margin machinery then gives them. Comparable in size to
+   * TRANSFER_S plus a re-gather. Calibration is against errors CHARGED,
+   * not runs allowed, so this number changes how much an error hurts
+   * rather than how often one happens. */
+  const BOBBLE_S = 0.8;
+
+  /* Fitted so the graph engine charges 0.53 errors per team-game, the
+   * 2024 league rate (0.52 in 2023, a record low). Measured over 2000
+   * games on the 250ft starter ring; tests/errors.test.js re-measures it
+   * and fails outside 0.48-0.58.
+   *
+   * The historical arc is steep and deliberately NOT modelled here:
+   * 3.04 errors per team-game in 1894, 1.71 in 1908, 1.5 in 1917, 0.53
+   * today. That is glove and groundskeeping history and it belongs to
+   * the era-rules layer as a rule that scales this constant.
+   *
+   * FITTED UNDER, and only meaningful under, these conditions: the 250ft
+   * starter ring (L.makeStarter(250)), the graph engine, 2000 games,
+   * seeds 1-2000 — 0.530 errors per team-game. Held out on the disjoint
+   * seeds 5001-7000: 0.514. It is NOT a universal constant: the same e0
+   * charges 0.39 per team-game on a 90ft ring and 0.01 on a 400ft one
+   * (500 games each), because field size moves the slack distribution the
+   * curves are read at, and the ORDINARY_S gate then admits a different
+   * share of plays. A field-size-independent rate needs the era-rules
+   * layer to scale this, not a different number here.
+   */
+  const ERROR_E0 = 0.172;
   // Beyond this the ball goes through a cutoff man rather than on the fly.
   const RELAY_AT = 200, RELAY_S = 0.55, RELAY_SPEED = 0.85;
 
@@ -278,7 +308,7 @@
    * `slots` is the standing alignment (fielders.js); it is computed once per
    * game and passed down, but callers may omit it.
    */
-  function resolveBallOut(occ, batter, plate, target, layout, paths, entry, rnd, canMove, contact, slots) {
+  function resolveBallOut(occ, batter, plate, target, layout, paths, entry, rnd, canMove, contact, slots, errCfg) {
     const D = slots || F.fielderSlots(layout);
     const grounder = contact.distFt < 150; // infield ball: runners are forced off
     const bs = L.batterStart(layout, paths, plate, target);
@@ -299,9 +329,81 @@
     const bags = [...new Set(exposed.map((e) => e.nx).concat(bs ? [bs.first] : []))];
     const assign = F.assignPlay(layout, D, contact, bags);
 
+    /* How many seconds the fielder has to spare. This is the same number
+     * the old binary catch test compared against zero, kept instead of
+     * thrown away: Statcast catch probability is built on exactly this,
+     * ground to cover against time available. It sits here, above tCatch,
+     * because a muffed play adds time to tCatch and so has to be decided
+     * first. */
+    const hangSec = contact.distFt / HIT_FTS;
+    const slack = hangSec - assign.tReach;
+
+    /* A grounder has no hang time, so its "routine-ness" is the seconds
+     * the defense has in hand at the batter's bag instead. Computed from
+     * the same pieces playTime uses, but without depending on tCatch --
+     * the bobble feeds tCatch, so this must be knowable first. Null when
+     * there is no bag to throw to, and muffChance treats null as zero. */
+    const groundSlack = (grounder && bs)
+      ? runSec(batter, ftBetween(posOf(layout, plate), posOf(layout, bs.first)), true)
+        - (assign.tReach + TRANSFER_S + throwSec(ftBetween(contact, posOf(layout, bs.first))))
+      : null;
+
+    /* When the defense would have the ball if nothing went wrong. The
+     * bobble is added to this below; the clean value is what decides
+     * whether there was a play to butcher in the first place. */
+    const tCatchClean = Math.max(hangSec, assign.tReach) + GLOVE_S;
+
+    /* Retiring somebody at `nodeId` needs the throw to arrive AND a body
+     * on the bag when it does; an uncovered bag is a free base. Taken as
+     * a function of the securing time so the same arithmetic can be asked
+     * twice: once with the clean time (would they have made it?) and once
+     * with the bobble folded in (did they still make it?).
+     */
+    const playTimeAt = (tSecure, nodeId) => {
+      const p = posOf(layout, nodeId);
+      const thrown = tSecure + throwSec(ftBetween(contact, p)) + TRANSFER_S;
+      const cov = F.covererFor(assign, nodeId);
+      return cov ? Math.max(thrown, cov.tArrive) : Infinity;
+    };
+
+    const batterRunT = bs
+      ? runSec(batter, ftBetween(posOf(layout, plate), posOf(layout, bs.first)), true)
+      : Infinity;
+
+    /* Did somebody get under it? A ball still in the air when a fielder
+     * reaches it is a catch, and a catch changes the runners' rights
+     * completely — which is the difference between a fly ball and a ground
+     * ball as far as the runners are concerned. This is the CLEAN catch:
+     * a muff below takes it away again.
+     */
+    const caughtClean = !grounder && (errCfg
+      ? rnd() < F.catchChance(slack)
+      : assign.tReach <= hangSec);
+
+    /* An error is not a tag drawn alongside the outcome — it is what turns
+     * a completed play into an uncompleted one. So the muff is only
+     * offered on plays the defense WOULD have finished: a fly they had
+     * caught, or a grounder whose throw would have beaten the batter. Roll
+     * it nowhere else and a muff can never land on a ball that was a hit
+     * anyway, nor on an out that stands regardless. The ORDINARY_S gate is
+     * Rule 9.12 and is checked here rather than left to muffChance's zero
+     * so that no draw is consumed on a play that could not be an error.
+     */
+    const wouldComplete = grounder
+      ? (!!bs && playTimeAt(tCatchClean, bs.first) < batterRunT)
+      : caughtClean;
+    const muffSlack = grounder ? groundSlack : slack;
+    const muffed = !!errCfg && wouldComplete
+      && typeof muffSlack === 'number' && muffSlack >= F.ORDINARY_S
+      && rnd() < F.muffChance(muffSlack, errCfg.e0);
+
+    // A muff UN-completes the play: the catch does not stand, so the force
+    // is back on and nobody has to tag up.
+    const caught = caughtClean && !muffed;
+
     // the ball is not fielded when it lands — it is fielded when somebody
     // gets to it, so a shot into the gap between two fielders hangs there
-    const tCatch = Math.max(contact.distFt / HIT_FTS, assign.tReach) + GLOVE_S;
+    const tCatch = tCatchClean + (muffed ? BOBBLE_S : 0);
 
     // tSecure is the moment the defense actually has the ball, measured
     // from contact. The animation reads it back so the ball cannot leave
@@ -332,21 +434,16 @@
       return 0;
     }
 
-    // retiring a runner at `nodeId` needs the throw to arrive AND somebody
-    // to be on the bag when it does; an uncovered bag is a free base
-    const playTime = (nodeId) => {
-      const p = posOf(layout, nodeId);
-      const thrown = tCatch + throwSec(ftBetween(contact, p)) + TRANSFER_S;
-      const cov = F.covererFor(assign, nodeId);
-      return cov ? Math.max(thrown, cov.tArrive) : Infinity;
-    };
+    // the real play clock, bobble and all
+    const playTime = (nodeId) => playTimeAt(tCatch, nodeId);
 
-    /* Did somebody get under it? A ball still in the air when a fielder
-     * reaches it is a catch, and a catch changes the runners' rights
-     * completely — which is the difference between a fly ball and a ground
-     * ball as far as the runners are concerned.
+    /* Did the bobble cost them the batter? No advancement distribution is
+     * invented for an error: the extra second goes into tCatch and the
+     * same margin machinery every other runner is judged by decides
+     * whether the batter beats the throw. This is the only way a batter
+     * reaches on an error.
      */
-    const caught = !grounder && assign.tReach <= contact.distFt / HIT_FTS;
+    const reached = muffed && !!bs && batterRunT < playTime(bs.first);
 
     /* Who is forced. The batter is running at `bs.first`, so whoever is
      * standing there has to vacate, which forces whoever is standing at
@@ -391,14 +488,18 @@
       }
     }
 
-    let outs = 1;
-    let batterSafe = false;
+    // Outs are counted where they are recorded rather than assumed: a
+    // muff that beat the throw to the batter's bag records none at all.
+    let outs = 0;
+    let batterOut = false;
+    let batterSafe = reached;
     if (goers.length) {
       goers.sort((a, b) => a.margin - b.margin);
       const g0 = goers[0];
       if (g0.margin + (rnd() - 0.5) * 0.8 < (grounder ? 0.15 : 0)) {
         // defense ignores the batter and guns down the riskiest runner
         occ.delete(g0.node);
+        outs++;
         entry.sub = 'CUT';
         entry.runnersOut.push(g0.r.name);
         entry.moves.push({ name: g0.r.name, spd: g0.r.spd, hp1: g0.r.hp1, path: [g0.node, g0.nx], out: true, tGo: g0.tGo });
@@ -420,6 +521,7 @@
             entry.runnersOut.push(batter.name);
             entry.moves.push({ name: batter.name, spd: batter.spd, hp1: batter.hp1, path: [plate, bs.first], out: true });
             batterSafe = false;
+            batterOut = true;
           }
         }
       }
@@ -439,12 +541,30 @@
     }
     if (batterSafe) {
       if (batterAdvance(occ, batter, plate, target, 1, layout, paths, entry,
-        { origin: plate }) === 'out') { outs++; entry.sub = 'DP'; }
+        { origin: plate }) === 'out') { outs++; entry.sub = 'DP'; batterOut = true; }
     } else if (entry.sub !== 'DP') {
       if (bs) {
         entry.moves.push({ name: batter.name, spd: batter.spd, hp1: batter.hp1, path: [plate, bs.first], out: true });
         if (!entry.throwTo) entry.throwTo = bs.first;
       }
+      outs++;
+      batterOut = true;
+    }
+
+    /* Charging the error, last, once the play is over. It rides its own
+     * boolean because `sub` is a single slot that CUT, DP and SF all claim
+     * unconditionally — an error on a double play has to be representable,
+     * and a box score that counts `sub === 'E'` silently loses those. The
+     * tag is still set when nothing else wants the slot.
+     *
+     * A muff the defense recovered from — the bobble cost them a second
+     * and they still got the batter — is not an error. Rule 9.12 charges
+     * one only where the misplay let somebody reach or advance, which here
+     * is exactly the case where the batter was not retired.
+     */
+    if (muffed && !batterOut) {
+      entry.error = true;
+      if (!entry.sub) entry.sub = 'E';
     }
     return outs;
   }
@@ -715,7 +835,7 @@
       } else { // ball in play, defense picks the best play
         entry.contact = contactFor(layout, plate, 'OUT', rnd);
         outs += resolveBallOut(occ, batter, plate, target, layout, paths, entry,
-          rnd, () => true, entry.contact, slots);
+          rnd, () => true, entry.contact, slots, cfg.errors || null);
       }
 
       runs += entry.runs;
@@ -815,7 +935,7 @@
   }
 
   const API = {
-    simGameGraph, simManyGraph,
+    simGameGraph, simManyGraph, ERROR_E0, BOBBLE_S,
     // shared machinery for the tri-pitch engine
     _internals: {
       advanceRunners, batterAdvance, walkAdvance, pushInto, makeSide, sideResult,
