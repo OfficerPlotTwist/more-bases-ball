@@ -163,27 +163,32 @@ check('tri engine: errors on is still seed-reproducible',
   triBox(ON, 7) === triBox(ON, 7));
 
 // ---- errors are actually charged, and tagged ----
-function countSubs(cfg, seeds, tag) {
-  let n = 0, plays = 0;
+// A charged error is `entry.error`, NOT `entry.sub === 'E'`. `sub` is one
+// slot that CUT, DP and SF claim unconditionally, so counting the tag
+// under-reports and makes an error on a double play unrepresentable.
+function countErrors(cfg, seeds) {
+  let n = 0, plays = 0, tagged = 0;
   for (const seed of seeds) {
     const g = G.simGameGraph(NYY, LAD, ring, cfg, seed);
-    for (const e of g.log) { plays++; if (e.sub === tag) n++; }
+    for (const e of g.log) { plays++; if (e.error) n++; if (e.sub === 'E') tagged++; }
   }
-  return { n, plays };
+  return { n, plays, tagged };
 }
 
 const LOUD = Object.assign({}, BASE, { errors: { e0: 0.9 } });
-const loud = countSubs(LOUD, [1, 2, 3, 4, 5, 6, 7, 8], 'E');
-check('a high e0 charges errors, tagged E', loud.n > 0,
+const loud = countErrors(LOUD, [1, 2, 3, 4, 5, 6, 7, 8]);
+check('a high e0 charges errors', loud.n > 0,
   `${loud.n} error(s) in ${loud.plays} plays`);
+check('the E tag survives: some charged errors carry a different sub',
+  loud.n >= loud.tagged, `${loud.tagged} tagged E of ${loud.n} charged`);
 
-const none = countSubs(BASE, [1, 2, 3, 4, 5, 6, 7, 8], 'E');
+const none = countErrors(BASE, [1, 2, 3, 4, 5, 6, 7, 8]);
 check('errors off charges none', none.n === 0, `${none.n}`);
 
 // Review Focus 5: enabled with a zero rate. No errors, but the draws
 // are still consumed, so the run stays reproducible from its seed.
 const ZERO = Object.assign({}, BASE, { errors: { e0: 0 } });
-const zero = countSubs(ZERO, [1, 2, 3, 4, 5, 6, 7, 8], 'E');
+const zero = countErrors(ZERO, [1, 2, 3, 4, 5, 6, 7, 8]);
 check('e0 of 0 charges no error', zero.n === 0, `${zero.n}`);
 check('e0 of 0 is still seed-reproducible', graphBox(ZERO, 7) === graphBox(ZERO, 7));
 
@@ -195,7 +200,7 @@ let impossible = 0, charged = 0, inspected = 0;
 for (let seed = 1; seed <= 25; seed++) {
   const g = G.simGameGraph(NYY, LAD, ring, bigE0, seed);
   for (const e of g.log) {
-    if (e.sub !== 'E') continue;
+    if (!e.error) continue;
     charged++;
     // NOTE: tReach lives on entry.defense (graphsim.js:309-312), NOT on
     // the entry itself. Reading e.tReach yields undefined, the guard
@@ -216,6 +221,36 @@ check('Rule 9.12 check actually inspected some plays', inspected > 0,
   `inspected ${inspected} of ${charged} charged`);
 check('no fly-ball error is charged below ordinary effort (Rule 9.12)',
   impossible === 0, `${impossible} impossible of ${inspected} inspected`);
+
+// ---- Fix 1 and 2: a muff UN-completes the play ----
+// The design bug this replaced sampled the muff as a tag drawn alongside
+// the outcome: 1203 of 2195 muffs landed on fly balls the fielder had
+// CAUGHT and retired the batter on (sub:'E', type:'OUT', one out), and
+// the batter was retired on 100% of charged errors, so reached-on-error
+// was structurally zero. Both are asserted against here.
+let chargedN = 0, batterRetired = 0, batterReached = 0, outsOnError = 0;
+for (let seed = 1; seed <= 200; seed++) {
+  const g = G.simGameGraph(NYY, LAD, ring, Object.assign({}, BASE, {
+    errors: { e0: G.ERROR_E0 },
+  }), seed);
+  let prevOuts = 0, prevInning = null, prevHalf = null;
+  for (const e of g.log) {
+    if (e.inning !== prevInning || e.half !== prevHalf) { prevOuts = 0; }
+    prevInning = e.inning; prevHalf = e.half;
+    const made = e.outsAfter - prevOuts;
+    prevOuts = e.outsAfter;
+    if (!e.error) continue;
+    chargedN++;
+    if (e.runnersOut.indexOf(e.batter) >= 0) batterRetired++; else batterReached++;
+    if (made > 0) outsOnError++;
+  }
+}
+check('errors are charged at all in this sample', chargedN > 0, `${chargedN} charged`);
+check('no charged error retires the batter on the muffed play',
+  batterRetired === 0, `${batterRetired} of ${chargedN} charged`);
+check('reached-on-error is not structurally zero',
+  batterReached > 0,
+  `${batterReached}/${chargedN} = ${(100 * batterReached / Math.max(1, chargedN)).toFixed(1)}%`);
 
 // Review Focus 3: a layout with no batter start must not throw or NaN.
 // (Corrected per task-4 brief: assert the game actually produced plays
@@ -246,7 +281,7 @@ for (let seed = 1; seed <= CAL_GAMES; seed++) {
   const g = G.simGameGraph(NYY, LAD, ring, {
     innings: 9, outs: 3, errors: { e0: G.ERROR_E0 },
   }, seed);
-  for (const e of g.log) if (e.sub === 'E') calErrs++;
+  for (const e of g.log) if (e.error) calErrs++;
 }
 const perTeamGame = calErrs / (CAL_GAMES * 2);
 check('errors per team-game is 0.53 +/- 0.05',
