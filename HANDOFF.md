@@ -8,10 +8,13 @@ things that are true only right now.
 
 | Branch | State | Next move |
 |---|---|---|
-| `main` | pushed, green, 26/26 | — |
-| `feat/fielding-errors` | **PR #1 open**, 8 commits, 26/26 | review and merge |
+| `main` | pushed, green, 26/26, **includes fielding errors** | — |
 | `plan/statcast-coverage` | a plan document only, no code | read it, decide |
-| `feat/era-rules-phase1` | already merged into `main` | safe to delete |
+
+PR #1 (fielding errors) was merged on 2026-09-25 as `163cd51`; its branch and
+`feat/era-rules-phase1` are deleted locally and on the remote. The errors model
+is on `main` and still **off by default** (`cfg.errors`), so nothing
+user-visible changed with the merge.
 
 `git log --oneline` on `main` back to `d10fdf5` covers the data spine, the
 mobile pass, and era-rules phase 1.
@@ -40,9 +43,7 @@ the current `index.html` and its supporting files. A clickable launcher sits in
 
 ## What to do next, in the order I would do it
 
-1. **Merge PR #1**, or reject the model — the PR body has the argument and the
-   known gaps. Nothing else depends on it.
-2. **Era rules phase 2.** The plan does not exist yet; write it against the
+1. **Era rules phase 2.** The plan does not exist yet; write it against the
    real API phase 1 produced. Three things MUST be in it, all of them carried
    forward deliberately:
    - Add a golden fixture case with a NON-ZERO mound delta. The composition
@@ -55,12 +56,12 @@ the current `index.html` and its supporting files. A clickable launcher sits in
      holds the confound policy; 2022's universal DH is the case that breaks a
      naive "reproduce the year-over-year delta" test, because real 2022 offense
      FELL while the DH's own effect was positive.
-3. **Statcast coverage.** `plan/statcast-coverage` says the highest-value work
+2. **Statcast coverage.** `plan/statcast-coverage` says the highest-value work
    is not any of the seven unused values but the shared transport: `data.js`
    emits no MLBAM id and no Statcast block past `spd`/`hp1`, and both the
    launch-angle and per-fielder-skill sub-projects are blocked on that one
    change. 4-6 hours.
-4. **Real Statcast launch angle** (user-requested, spec'd nowhere yet). `la`
+3. **Real Statcast launch angle** (user-requested, spec'd nowhere yet). `la`
    is already fetched by `tools/build-statcast.mjs`; it just never reaches the
    browser. `field3d.js`'s `arcHeight()` has no physics in it at all — the
    homer arc is literally `par * Math.min(150, distFt * 0.27)`. Adding fields
