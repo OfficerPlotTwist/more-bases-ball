@@ -162,12 +162,17 @@ out += ' * GENERATED — rebuild with `node tools/build-data.mjs`, do not hand-e
 out += ' */' + NL;
 out += '(function (global) {' + NL;
 out += "  'use strict';" + NL + NL;
-out += '  // p = [name, pos, PA, H, 2B, 3B, HR, BB, SO, sprint_ft_s, hp_to_1b_s]' + NL;
+out += '  // p = [name, pos, PA, H, 2B, 3B, HR, BB, SO, sprint_ft_s, hp_to_1b_s,' + NL;
+out += '  //      mlbam, launch_angle_deg, exit_velo_mph, oaa, arm_mph]' + NL;
+out += '  // The last five may be null. A null is a real absence — a full-time DH' + NL;
+out += '  // has no oaa and no qualifying arm throw — never a league median.' + NL;
 out += '  function P(a) {' + NL;
 out += '    return {' + NL;
 out += '      name: a[0], pos: a[1], pa: a[2], h: a[3],' + NL;
 out += '      d2: a[4], d3: a[5], hr: a[6], bb: a[7], so: a[8],' + NL;
 out += '      spd: a[9], hp1: a[10],' + NL;
+out += '      mlbam: a[11] ?? null, la: a[12] ?? null, ev: a[13] ?? null,' + NL;
+out += '      oaa: a[14] ?? null, arm: a[15] ?? null,' + NL;
 out += '    };' + NL;
 out += '  }' + NL + NL;
 out += '  const SEASONS = {' + NL;
@@ -178,8 +183,21 @@ for (const y of ys) {
     out += `      { id: ${esc(t.abbr)}, name: ${esc(t.name)}, abbr: ${esc(t.abbr)},`
       + ` color: ${esc(COLORS[t.abbr] || '#6E8A9B')},` + NL + '        lineup: [' + NL;
     for (const p of t.lineup) {
+      /* p.id is the MLBAM id this script already joined the sprint board on.
+       * It used to be dropped here, which made every later per-player join a
+       * NAME join — and four names in the five shipped seasons belong to two
+       * men each (Will Smith the catcher and Will Smith the reliever, two
+       * Diego Castillos, two Max Muncys). Emitting it costs six characters a
+       * row and removes the whole class of problem.
+       *
+       * The four Statcast values are emitted as `null` because this script
+       * fetches only the sprint board; tools/augment-data.mjs fills them from
+       * data/statcast/*.parquet. A rebuild therefore BLANKS them and the
+       * augment pass must be re-run — which the log line below says, because
+       * a silently blanked la is a 3D arc that quietly reverts to a heuristic. */
       out += `          P([${esc(p.name)}, ${esc(p.pos)}, ${p.pa}, ${p.h}, ${p.d2}, `
-        + `${p.d3}, ${p.hr}, ${p.bb}, ${p.so}, ${p.spd}, ${p.hp1}]),` + NL;
+        + `${p.d3}, ${p.hr}, ${p.bb}, ${p.so}, ${p.spd}, ${p.hp1}, ${p.id}, `
+        + 'null, null, null, null]),' + NL;
     }
     out += '        ] },' + NL;
   }
@@ -202,5 +220,8 @@ out += '  else global.MBB_DATA = API;' + NL;
 out += "})(typeof window !== 'undefined' ? window : globalThis);" + NL;
 
 fs.writeFileSync(OUT, out);
+console.log('NOTE: la/ev/oaa/arm are written as null by this script. Re-run '
+  + '`node tools/augment-data.mjs` to refill them, then '
+  + '`node tools/check-data-identity.mjs --against <the previous data.js>`.');
 console.log(`wrote data.js  ${(out.length / 1024).toFixed(0)}KB  `
   + `${ys.length} seasons  ${ys.reduce((n, y) => n + seasons[y].length, 0)} lineups`);

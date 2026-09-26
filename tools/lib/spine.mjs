@@ -293,6 +293,60 @@ export async function openSpine(dataDir = path.join(ROOT, 'data'), opts = {}) {
       return normaliseRows(rows);
     },
 
+    /* Every batter of one season grouped by NAME, each entry a LIST of
+     * candidates carrying the Statcast values data.js does not ship yet.
+     * This exists for one caller: tools/augment-data.mjs, which has to attach
+     * an mlbam to a committed data.js that has no id on it, so the only key it
+     * starts from is the name.
+     *
+     * A name is not a key, and this method does not pretend it is — it returns
+     * every man who bore it and lets the caller disambiguate on `pa`, which is
+     * an exact integer from the same Stats API season line data.js was built
+     * from. Four real collisions exist across the five shipped seasons (Will
+     * Smith the catcher and Will Smith the reliever, two Diego Castillos, two
+     * Max Muncys); handing back the higher-PA row and calling it a match is how
+     * a catcher inherits a reliever's launch angle.
+     *
+     * A traded player holds one seasons row per club with one mlbam. Those
+     * collapse to a single candidate, because the Statcast boards are
+     * season-grain per player and do not split by club — his Statcast values
+     * are one set of numbers however many uniforms he wore.
+     *
+     * `pa` therefore comes back BOTH ways: `pa` is the full-season total and
+     * `paByClub` is every per-club split. data.js carries the per-club split
+     * (build-data.mjs asks the hydrate for `,team)` and takes the club's own
+     * split), so a traded batter appears in TWO clubs' lineups in one season
+     * with two different PA totals, and matching him on the season total alone
+     * would fail on both of them. The caller checks against either. */
+    async battersByName({ year }) {
+      checkYear(year);
+      const rows = await db.all(
+        `SELECT s.name  AS name,
+                s.mlbam AS mlbam,
+                SUM(s.pa)              AS pa,
+                LIST(s.pa)             AS paByClub,
+                MAX(c.la)              AS la,
+                MAX(c.ev)              AS ev,
+                MAX(c.oaa)             AS oaa,
+                MAX(c.arm)             AS arm
+           FROM read_parquet('${seasons}') s
+           LEFT JOIN read_parquet('${statcast}') c
+                  ON c.mlbam = s.mlbam AND c.year = s.year
+          WHERE s.year = ${year} AND s.role = 'bat'
+          GROUP BY s.name, s.mlbam`);
+      const out = new Map();
+      for (const r of normaliseRows(rows)) {
+        const list = out.get(r.name) || [];
+        list.push({
+          name: r.name, mlbam: Number(r.mlbam), pa: Number(r.pa),
+          paByClub: Array.from(r.paByClub || []).map(Number),
+          la: r.la, ev: r.ev, oaa: r.oaa, arm: r.arm,
+        });
+        out.set(r.name, list);
+      }
+      return out;
+    },
+
     /* League totals for one season, summed across every club. The era-rules
      * calibration harness reads this; nothing else may open the parquet
      * directly, which is what keeps the storage layout swappable. */
