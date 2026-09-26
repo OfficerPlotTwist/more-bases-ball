@@ -37,7 +37,7 @@ box score is byte-identical before and after.
 ## Tests
 
 `node tools/run-tests.mjs` (portable) or
-`for t in tests/*.test.js; do node $t; done` — all 26 files must pass.
+`for t in tests/*.test.js; do node $t; done` — all 27 files must pass.
 `tests/defense-stress.test.js` is the one to run after touching anything in
 `fielders.js` or `resolveBallOut`: it covers the awkward custom layouts.
 
@@ -158,6 +158,64 @@ Errors are behind `cfg.errors = { e0 }` and OFF by default.
 `tests/fixtures/defense-golden.json` holds 10 boxes captured before any of
 this existed; if one moves while errors are off, a draw is being consumed that
 was not consumed before.
+
+## Statcast transport
+
+`data.js` ships sixteen values per batter. The first eleven are the batting
+line and the two sprint numbers, and they are frozen. The last five —
+`mlbam`, `la`, `ev`, `oaa`, `arm` — exist so the launch-angle and
+per-fielder-skill work are engine changes with no data work in front of them.
+
+- **It is an APPEND, not a rebuild, and the distinction is the whole design.**
+  `tools/augment-data.mjs` reads the committed `data.js`, slices each
+  `P([...])` literal's existing text, and appends after it. The eleven are
+  never re-serialised and never refetched, so identity holds by construction.
+  Running `tools/build-data.mjs` instead refetches 2025 — an open season still
+  taking corrections, and unlike the spine builders it passes no
+  `isVolatileSeason` flag — so one corrected PA total reorders "the nine
+  batters with the most plate appearances", swaps the ninth man, and moves
+  every box score that `tests/rules-identity.test.js` indexes positionally.
+  A rebuild is a deliberate act with its own delta report. It is not how you
+  add a field.
+- **`tools/check-data-identity.mjs` compares the DATA, not the box score**, and
+  runs BEFORE the suite. The suite is downstream and can go green on a moved
+  value: a median-filled bench bat who never reaches base in the ten fixture
+  games ships without reddening anything. The checker asserts the season list,
+  club order, lineup order and all eleven values exactly — no epsilon — and
+  reports what moved, for which player, in which season. It is negative-tested;
+  moving one hit yields `2021 ATL Freddie Freeman: h 180 -> 181`.
+- **A missing value is `null`, never 0 and never a median.** `oaa` and `arm` are
+  absent for a full-time DH because he does not field and makes no qualifying
+  throw — that absence is the real signal. `arm: 0` reaching `throwSec()` is a
+  fielder who cannot release the ball; `oaa: 0` is a bench bat rated as an
+  average defender. Both look plausible in a box score, so
+  `tests/data-transport.test.js` asserts against them directly. Fill within a
+  covered season; never fill an uncovered one.
+- **The name join was NOT safe, and this is why `mlbam` is emitted.** Four
+  names across the five shipped seasons belong to two men each — Will Smith the
+  catcher and Will Smith the reliever (2021, 2023), two Diego Castillos (2022),
+  two Max Muncys (2025). Taking the higher-PA row would have attached a
+  reliever's launch angle to a catcher, silently. The join is `(name, pa)`
+  against either the season total or any club split, because a batter traded
+  mid-season holds TWO lineup spots with his own split for each (2025 Rafael
+  Devers, BOS and SF) — so `ids.size < players` is the correct invariant, not
+  one id per season. `build-data.mjs` now emits `p.id`, which it always had in
+  hand, so this is solved once rather than every time.
+- **`la`/`ev` are 1350/1350 complete** for every shipped season: the arc
+  sub-project needs no fallback, no median and no off switch. `oaa` (1225) and
+  `arm` (1171) are structurally partial. The test carries coverage FLOORS
+  because every other assertion only inspects a player who has a value, so a
+  collapsed join would pass all of them.
+- **`xwoba`, `bat_speed` and `swing_len` are deliberately absent** from
+  `data.js` and still fetched into the spine. `xwoba` collapses the five
+  outcomes `plateAppearance` already draws from, so feeding it back either
+  duplicates or contradicts the observed line; `bat_speed` is a second proxy
+  for what `ev` carries and covers 0 of 270 batters in 2021 and 2022;
+  `swing_len` has no surface in a simulator with no pitch location, count or
+  swing decision. The full ruling is
+  `docs/superpowers/plans/2026-09-23-statcast-coverage.md`.
+- Query the new columns through `tools/lib/spine.mjs` `battersByName()` only,
+  like everything else that touches Parquet.
 
 ## Data spine
 
@@ -292,9 +350,11 @@ generated and gitignored.
   Three builders cite it by path for why they are shaped as they are. The review
   diffs are not committed; the README there lists every commit range so
   `git diff <range>` reproduces them exactly.
-- **`data.js` is unchanged and stays that way.** It is the committed slice
-  the browser sim loads; its run environment is published in the README and
-  `tests/ngon.test.js` asserts the box scores do not move. Regenerating it
-  from the spine is a later sub-project, gated by a golden-run identity test
-  — do it here and the published numbers move under the reader and the test
-  suite goes red.
+- **`data.js`'s eleven shipped values are unchanged and stay that way.** It is
+  the committed slice the browser sim loads; its run environment is published in
+  the README and `tests/ngon.test.js` asserts the box scores do not move.
+  REGENERATING it from the spine is still a later sub-project — do that here and
+  the published numbers move under the reader.
+  - It now carries five MORE values per batter (`mlbam`, `la`, `ev`, `oaa`,
+    `arm`) and the eleven are untouched. See **Statcast transport** below for
+    why appending is a different act from regenerating.
