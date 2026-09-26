@@ -9,7 +9,9 @@ things that are true only right now.
 | Branch | State | Next move |
 |---|---|---|
 | `main` | pushed, green, 26/26, **includes fielding errors** | — |
-| `plan/statcast-coverage` | a plan document only, no code | read it, decide |
+| `feat/statcast-transport` | **PR #2 open**, 3 commits, 27/27 | review and merge |
+| `plan/era-rules-phase2` | a plan document only, no code | read it, then execute it |
+| `plan/statcast-coverage` | **superseded** — its plan doc was carried onto PR #2 | delete after PR #2 merges |
 
 PR #1 (fielding errors) was merged on 2026-09-25 as `163cd51`; its branch and
 `feat/era-rules-phase1` are deleted locally and on the remote. The errors model
@@ -43,7 +45,17 @@ the current `index.html` and its supporting files. A clickable launcher sits in
 
 ## What to do next, in the order I would do it
 
-1. **Era rules phase 2.** The plan does not exist yet; write it against the
+1. **Merge PR #2** (the Statcast transport), or reject the model. `data.js` now
+   carries `mlbam`, `la`, `ev`, `oaa`, `arm` beside its frozen eleven. Nothing
+   consumes the four Statcast values yet — that is the point: both the
+   launch-angle and per-fielder-skill sub-projects are now renderer/engine
+   changes with no data work in front of them.
+2. **Execute `docs/superpowers/plans/2026-09-25-era-rules-phase2.md`**, on
+   `plan/era-rules-phase2`. Twelve tasks, and its first section is five findings
+   that contradict what this file used to say. Read that section before anything
+   else; two of the five would have shipped a wrong number in silence.
+3. **Era rules phase 2 — the old summary of it, kept for the three points it
+   still gets right.** The plan does not exist yet; write it against the
    real API phase 1 produced. Three things MUST be in it, all of them carried
    forward deliberately:
    - Add a golden fixture case with a NON-ZERO mound delta. The composition
@@ -90,6 +102,17 @@ is written down rather than hidden.
   Whoever flips the default has to wire it.
 - **`data.js` still ships 2021-2025 only.** Era mode means modern players under
   old rules. The spine has the real 1927 players whenever that changes.
+- **The DH cannot be modelled yet, and it is the best-sourced rule in the
+  catalog.** Both DH rules are Tier A `LINEUP`, and their whole effect is
+  replacing a .110-hitting pitcher with a league-average bat — but `data.js`
+  ships nine real batters and no pitcher batting line, so there is nothing to
+  replace. Phase 2 Task 11 scopes it and stops.
+- **Four of six rate keys have no sigma denominator.** `KPIS` has no per-PA KPI
+  for `s1`, `d2` or `d3`, and `hr`'s is per GAME. Until phase 2 Task 4 lands,
+  the 2σ calibration threshold can only be applied to `bb`.
+- **`leagueLine()` cannot filter by league**, which makes the one true
+  diff-in-diff in the rules catalog (1931: the NL deadened its ball, the AL did
+  not) uncomputable. Phase 2 Task 5.
 
 ## Repo hygiene
 
